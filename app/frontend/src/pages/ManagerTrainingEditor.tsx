@@ -246,7 +246,11 @@ export const ManagerTrainingEditor: React.FC = () => {
     };
 
     const handleCreateModule = async () => {
-        if (!id || !newModuleTitle.trim()) return;
+        if (!id) return;
+        if (!newModuleTitle.trim()) {
+            toast.error('Module title is required.');
+            return;
+        }
         try {
             const nextOrder = training?.modules.length ? training.modules.length + 1 : 1;
             await managerTrainingsApi.createModule(id, {
@@ -256,18 +260,64 @@ export const ManagerTrainingEditor: React.FC = () => {
             setActiveInlineForm(null);
             setNewModuleTitle('');
             await fetchStructure();
-        } catch (error) {
+            toast.success('Module added.');
+        } catch (error: unknown) {
             console.error(error);
+            const message = (error as { message?: string })?.message;
+            toast.error(message || 'Failed to add module.');
         }
     };
 
     const handleSaveChapter = async (moduleId?: string) => {
         if (!id) return;
         setChapterSaveAttempted(true);
-        if (!newChapterTitle.trim()) return;
-        if (newChapterType !== 'QUIZ' && newChapterType !== 'SCORM' && !newChapterContent.trim()) return;
-        if (newChapterType === 'VIDEO' && newChapterContent.trim() && !isValidUrl(newChapterContent.trim())) return;
-        if (newChapterType === 'SCORM' && !scormFile && !editingChapterId) return;
+
+        // Validation — surface the FIRST missing field as a toast so the user
+        // doesn't have to hunt for the inline error.
+        if (!newChapterTitle.trim()) {
+            toast.error('Chapter title is required.');
+            return;
+        }
+        if (newChapterType !== 'QUIZ' && newChapterType !== 'SCORM' && !newChapterContent.trim()) {
+            toast.error(
+                newChapterType === 'VIDEO'
+                    ? 'Video URL is required.'
+                    : 'Chapter content is required.',
+            );
+            return;
+        }
+        if (newChapterType === 'VIDEO' && newChapterContent.trim() && !isValidUrl(newChapterContent.trim())) {
+            toast.error('Please enter a valid URL (must start with http:// or https://).');
+            return;
+        }
+        if (newChapterType === 'SCORM' && !scormFile && !editingChapterId) {
+            toast.error('Please choose a SCORM ZIP package to upload.');
+            return;
+        }
+        if (newChapterType === 'QUIZ') {
+            if (quizQuestions.length === 0) {
+                toast.error('Add at least one question to the quiz.');
+                return;
+            }
+            const incompleteQuestion = quizQuestions.find(q => {
+                if (!q.text.trim()) return true;
+                if (q.type === 'matching') {
+                    const hasPairs = (q.correct_option_ids || []).length > 0;
+                    return !hasPairs;
+                }
+                if (q.type === 'ordering') {
+                    return (q.options || []).length < 2 || q.options.some(o => !o.text.trim());
+                }
+                // multiple_choice / multiple_select / true_false
+                const hasCorrect = (q.correct_option_ids || []).length > 0;
+                const allOptionsHaveText = (q.options || []).every(o => o.text.trim());
+                return !hasCorrect || !allOptionsHaveText;
+            });
+            if (incompleteQuestion) {
+                toast.error('Each question needs text, options, and a correct answer.');
+                return;
+            }
+        }
 
         setIsSavingChapter(true);
         try {
@@ -337,8 +387,11 @@ export const ManagerTrainingEditor: React.FC = () => {
             setEditingChapterId(null);
             setChapterSaveAttempted(false);
             await fetchStructure();
-        } catch (error) {
+            toast.success(editingChapterId ? 'Chapter updated.' : 'Chapter added.');
+        } catch (error: unknown) {
             console.error(error);
+            const message = (error as { message?: string })?.message;
+            toast.error(message || 'Failed to save chapter.');
         } finally {
             setIsSavingChapter(false);
         }

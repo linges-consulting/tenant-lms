@@ -67,8 +67,13 @@ vi.mock('../../components/TrainingAuditTimeline', () => ({
 }));
 
 // sonner toasts try to mount portals.
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
 vi.mock('sonner', () => ({
-    toast: { success: vi.fn(), error: vi.fn() },
+    toast: {
+        success: (...a: unknown[]) => toastSuccess(...a),
+        error: (...a: unknown[]) => toastError(...a),
+    },
 }));
 
 // ---- Fixtures -----------------------------------------------------------
@@ -358,7 +363,7 @@ describe('ManagerTrainingEditor — curriculum CRUD', () => {
         expect((payload.content_data as { text: string }).text).toContain('Some content body');
     });
 
-    it('Add Chapter rejects an empty title (no API call, inline validation)', async () => {
+    it('Add Chapter rejects an empty title (no API call, inline validation + toast)', async () => {
         const user = userEvent.setup();
         renderEditor();
         await waitFor(() => screen.getByText('Editable Training'));
@@ -375,6 +380,71 @@ describe('ManagerTrainingEditor — curriculum CRUD', () => {
             expect(screen.getByText(/Chapter title is required/i)).toBeInTheDocument();
         });
         expect(createChapter).not.toHaveBeenCalled();
+        // Toast surfaces the same problem so the user notices without scrolling
+        expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/title is required/i));
+    });
+
+    it('Add Chapter toasts on Video URL validation failure', async () => {
+        const user = userEvent.setup();
+        renderEditor();
+        await waitFor(() => screen.getByText('Editable Training'));
+
+        await user.click(screen.getByRole('button', { name: /^Chapter$/ }));
+        // Video is the default type — fill title + a malformed URL
+        const chapterTitle = await screen.findByPlaceholderText(/Fundamental Concepts/i);
+        await user.type(chapterTitle, 'Bad URL Chapter');
+        const urlInput = screen.getByPlaceholderText(/YouTube, Vimeo, or MP4 URL/i);
+        await user.type(urlInput, 'not-a-url');
+
+        const saveBtns = screen.getAllByRole('button', { name: /Save Chapter/i });
+        await user.click(saveBtns[0]);
+
+        expect(createChapter).not.toHaveBeenCalled();
+        expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/valid URL/i));
+    });
+
+    it('Add Chapter toasts on backend save failure', async () => {
+        const user = userEvent.setup();
+        createChapter.mockRejectedValueOnce({ message: 'A chapter with this title already exists.' });
+        renderEditor();
+        await waitFor(() => screen.getByText('Editable Training'));
+
+        await user.click(screen.getByRole('button', { name: /^Chapter$/ }));
+        await user.click(screen.getByRole('button', { name: /^Text$/ }));
+
+        const chapterTitle = await screen.findByPlaceholderText(/Fundamental Concepts/i);
+        await user.type(chapterTitle, 'Dup Chapter');
+        const rte = screen.getByTestId('rich-text-editor');
+        await user.type(rte, 'body');
+
+        const saveBtns = screen.getAllByRole('button', { name: /Save Chapter/i });
+        await user.click(saveBtns[0]);
+
+        await waitFor(() => {
+            expect(createChapter).toHaveBeenCalledTimes(1);
+        });
+        await waitFor(() => {
+            expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/already exists/i));
+        });
+    });
+
+    it('Add Module toasts on backend save failure', async () => {
+        const user = userEvent.setup();
+        createModule.mockRejectedValueOnce({ message: 'Module name already in use.' });
+        renderEditor();
+        await waitFor(() => screen.getByText('Editable Training'));
+
+        await user.click(screen.getByRole('button', { name: /^Module$/ }));
+        const titleInput = await screen.findByPlaceholderText(/Introduction|Module/i);
+        await user.type(titleInput, 'Dup Module');
+        await user.click(screen.getByRole('button', { name: /Save Module/i }));
+
+        await waitFor(() => {
+            expect(createModule).toHaveBeenCalledTimes(1);
+        });
+        await waitFor(() => {
+            expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/already in use/i));
+        });
     });
 
     it('Delete chapter button opens confirmation and calls deleteChapter on confirm', async () => {
