@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}Course Completed!{% endblock %}
+
+{% block header_title %}Congratulations!{% endblock %}
+{% block header_subtitle %}Training Achievement{% endblock %}
+
+{% block extra_style %}
+    .badge { font-size: 3rem; margin-bottom: 1.5rem; text-align: center; }
+    .greeting { font-size: 1.25rem; margin-bottom: 1rem; font-weight: 700; text-align: center; color: #111827; }
+    .congrats { font-size: 1rem; color: #4b5563; margin-bottom: 1.5rem; text-align: center; line-height: 1.6; }
+    .course-card { background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 0.75rem; padding: 1.5rem; margin-bottom: 2rem; text-align: center; }
+    .course-title { font-size: 1.125rem; font-weight: 800; color: {{ primary_color or '#4f46e5' }}; }
+    .cta-container { margin-top: 2rem; text-align: center; }
+{% endblock %}
+
+{% block content %}
+    <div class="badge">🎓</div>
+    <p class="greeting">Way to go, {{ full_name }}!</p>
+    <p class="congrats">
+        You have successfully completed all modules for the following course:
+    </p>
+    <div class="course-card">
+        <p class="course-title">{{ training_title }}</p>
+    </div>
+    <p class="congrats">
+        Your certificate is now available in your learning dashboard.
+    </p>
+    <div class="cta-container">
+        <a href="{{ dashboard_url }}" class="cta-button button-shadow">View My Certificates</a>
+    </div>
+{% endblock %}

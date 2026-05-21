@@ -1,0 +1,6 @@
+
+> frontend@0.0.0 build
+> tsc -b && vite build
+
+src/pages/ManagerTrainingEditor.tsx(9,72): error TS6133: 'LayoutList' is declared but its value is never read.
+src/pages/ManagerTrainingEditor.tsx(12,68): error TS6196: 'Module' is declared but never used.

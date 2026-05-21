@@ -1,0 +1,138 @@
+{
+  "admin": {
+    "email": "admin@cpvmtraining.com",
+    "full_name": "Global Admin",
+    "username": "sysadmin",
+    "password": "Password123!"
+  },
+  "tenants": [
+    {
+      "id": "tenant-cp",
+      "name": "CellularPoint",
+      "primary_color": "#1a73e8"
+    },
+    {
+      "id": "tenant-vm",
+      "name": "ValueMobile",
+      "primary_color": "#d93025"
+    }
+  ],
+  "users": [
+    {
+      "email": "cp-manager@lms.com",
+      "full_name": "CP Manager",
+      "username": "cp_manager",
+      "memberships": [
+        { "tenant_id": "tenant-cp", "manager": true }
+      ]
+    },
+    {
+      "email": "cp-creator@lms.com",
+      "full_name": "CP Creator",
+      "username": "cp_creator",
+      "memberships": [
+        { "tenant_id": "tenant-cp", "creator": true }
+      ]
+    },
+    {
+      "email": "cp-employee@lms.com",
+      "full_name": "CP Employee",
+      "username": "cp_employee",
+      "memberships": [
+        { "tenant_id": "tenant-cp", "employee": true }
+      ]
+    },
+    {
+      "email": "cp-dual@lms.com",
+      "full_name": "CP Dual Role",
+      "username": "cp_dual",
+      "memberships": [
+        { "tenant_id": "tenant-cp", "manager": true, "creator": true, "employee": true }
+      ]
+    },
+    {
+      "email": "vm-manager@lms.com",
+      "full_name": "VM Manager",
+      "username": "vm_manager",
+      "memberships": [
+        { "tenant_id": "tenant-vm", "manager": true }
+      ]
+    },
+    {
+      "email": "vm-creator@lms.com",
+      "full_name": "VM Creator",
+      "username": "vm_creator",
+      "memberships": [
+        { "tenant_id": "tenant-vm", "creator": true }
+      ]
+    },
+    {
+      "email": "vm-employee@lms.com",
+      "full_name": "VM Employee",
+      "username": "vm_employee",
+      "memberships": [
+        { "tenant_id": "tenant-vm", "employee": true }
+      ]
+    },
+    {
+      "email": "vm-dual@lms.com",
+      "full_name": "VM Dual Role",
+      "username": "vm_dual",
+      "memberships": [
+        { "tenant_id": "tenant-vm", "manager": true, "creator": true, "employee": true }
+      ]
+    },
+    {
+      "email": "cross-mm@lms.com",
+      "full_name": "Cross Org Manager",
+      "username": "cross_mm",
+      "memberships": [
+        { "tenant_id": "tenant-cp", "manager": true },
+        { "tenant_id": "tenant-vm", "manager": true }
+      ]
+    },
+    {
+      "email": "cross-me@lms.com",
+      "full_name": "Cross Org Member",
+      "username": "cross_me",
+      "memberships": [
+        { "tenant_id": "tenant-cp", "manager": true },
+        { "tenant_id": "tenant-vm", "employee": true }
+      ]
+    },
+    {
+      "email": "pending-user@lms.com",
+      "full_name": "Pending User",
+      "username": "pending_user",
+      "memberships": [
+        { "tenant_id": "tenant-cp", "employee": true, "status": "PENDING", "is_active": false }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "group-cp-sales",
+      "name": "Sales Team",
+      "tenant_id": "tenant-cp",
+      "description": "CellularPoint sales representatives",
+      "members": ["cp-employee@lms.com"]
+    },
+    {
+      "id": "group-cp-ops",
+      "name": "Operations",
+      "tenant_id": "tenant-cp",
+      "description": "CellularPoint operations staff",
+      "members": ["cp-dual@lms.com"]
+    },
+    {
+      "id": "group-vm-sales",
+      "name": "Sales Team",
+      "tenant_id": "tenant-vm",
+      "description": "ValueMobile sales representatives",
+      "members": ["vm-employee@lms.com", "vm-dual@lms.com"]
+    }
+  ],
+  "trainings": [
+    
+  ]
+}

@@ -1,0 +1,9 @@
+email,first_name,last_name,is_business_manager,is_training_creator
+john.smith@example.com,John,Smith,false,false
+sarah.jones@example.com,Sarah,Jones,true,false
+mike.chen@example.com,Mike,Chen,false,true
+emma.wilson@example.com,Emma,Wilson,true,true
+david.brown@example.com,David,Brown,false,false
+lisa.taylor@example.com,Lisa,Taylor,false,false
+james.anderson@example.com,James,Anderson,false,true
+anna.martinez@example.com,Anna,Martinez,true,false

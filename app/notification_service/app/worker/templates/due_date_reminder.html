@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<html>
+<head><title>Training Due Soon</title></head>
+<body>
+<h2>Training Due in {{ days_before }} Day{{ 's' if days_before != 1 else '' }}</h2>
+<p><strong>{{ training_title }}</strong> is due on {{ due_date }}.</p>
+<a href="{{ frontend_url }}/dashboard">Continue Training</a>
+</body>
+</html>

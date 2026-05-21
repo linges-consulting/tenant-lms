@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Registration Link</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .header {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 40px 30px;
+            text-align: center;
+        }
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+        .header p {
+            font-size: 14px;
+            opacity: 0.95;
+        }
+        .content {
+            padding: 40px 30px;
+        }
+        .alert {
+            background-color: #f0f4ff;
+            border-left: 4px solid #f5576c;
+            padding: 15px;
+            margin-bottom: 25px;
+            border-radius: 4px;
+            font-size: 14px;
+            color: #333;
+        }
+        .alert strong {
+            color: #f5576c;
+        }
+        .greeting {
+            font-size: 16px;
+            margin-bottom: 20px;
+        }
+        .greeting strong {
+            font-weight: 600;
+            color: #f5576c;
+        }
+        .description {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 25px;
+            line-height: 1.8;
+        }
+        .status-section {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 25px 0;
+            font-size: 13px;
+            color: #856404;
+        }
+        .status-section strong {
+            color: #d39e00;
+        }
+        .cta-container {
+            text-align: center;
+            margin: 35px 0;
+        }
+        .cta-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            text-decoration: none;
+            padding: 14px 40px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 16px;
+            transition: transform 0.2s;
+        }
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(245, 87, 108, 0.4);
+        }
+        .token-section {
+            background-color: #f5f5f5;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 20px;
+            margin: 25px 0;
+        }
+        .token-label {
+            font-size: 12px;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+            display: block;
+        }
+        .token-code {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 13px;
+            color: #333;
+            word-break: break-all;
+            padding: 12px;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            line-height: 1.6;
+        }
+        .old-token-notice {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 20px 0;
+            font-size: 13px;
+            color: #721c24;
+        }
+        .old-token-notice strong {
+            color: #721c24;
+        }
+        .new-expiration {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 20px 0;
+            font-size: 13px;
+            color: #0c5460;
+        }
+        .new-expiration strong {
+            color: #0c5460;
+        }
+        .footer {
+            background-color: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+            padding: 30px;
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+        }
+        .footer p {
+            margin: 8px 0;
+        }
+        .social-links {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #e0e0e0;
+        }
+        .social-links a {
+            color: #f5576c;
+            text-decoration: none;
+            margin: 0 10px;
+            font-size: 12px;
+        }
+        @media (max-width: 600px) {
+            .container { border-radius: 0; }
+            .header { padding: 30px 20px; }
+            .header h1 { font-size: 24px; }
+            .content { padding: 30px 20px; }
+            .footer { padding: 20px; }
+            .cta-button { padding: 12px 30px; font-size: 14px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>New Registration Link</h1>
+            <p>Your Registration Token Has Been Regenerated</p>
+        </div>
+
+        <!-- Content -->
+        <div class="content">
+            <!-- Alert -->
+            <div class="alert">
+                <strong>✓ Your registration link has been updated</strong> — Your new link is ready to use!
+            </div>
+
+            <p class="greeting">Hi <strong>{{ full_name }}</strong>,</p>
+
+            <p class="description">
+                Your registration link has been regenerated. Please use the new link below to complete your account setup.
+            </p>
+
+            <!-- CTA Button -->
+            <div class="cta-container">
+                <a href="{{ registration_url }}" class="cta-button">Use New Registration Link</a>
+            </div>
+
+            <!-- Token Alternative -->
+            <p style="text-align: center; color: #999; font-size: 13px; margin: 20px 0;">
+                Or copy and paste this token:
+            </p>
+            <div class="token-section">
+                <span class="token-label">New Registration Token</span>
+                <div class="token-code">{{ token }}</div>
+            </div>
+
+            <!-- Old Token Notice -->
+            <div class="old-token-notice">
+                <strong>⚠️ Old Link Expired:</strong> Your previous registration link is no longer valid.
+                Please use only the new link provided above.
+            </div>
+
+            <!-- New Expiration Notice -->
+            <div class="new-expiration">
+                <strong>⏰ New Expiration:</strong> This link will expire on <strong>{{ expires_at }}</strong> (7 days from now).
+                Make sure to complete your registration before then.
+            </div>
+
+            <!-- Help Section -->
+            <div class="status-section">
+                <strong>Questions?</strong> If you did not request a new registration link, or have any questions,
+                please contact your organization administrator at <strong>{{ support_email }}</strong>.
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p>&copy; {{ current_year }} CustomLMS. All rights reserved.</p>
+            <p>This is an automated message, please do not reply directly to this email.</p>
+            <div class="social-links">
+                <a href="{{ company_website }}">Visit Our Website</a> |
+                <a href="{{ help_center }}">Help Center</a> |
+                <a href="{{ privacy_policy }}">Privacy Policy</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

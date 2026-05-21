@@ -1,0 +1,74 @@
+name: Seed Database
+
+# Manual trigger only — never runs automatically.
+# Go to Actions → Seed Database → Run workflow to choose a mode.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Seed mode"
+        required: true
+        default: "admin-only"
+        type: choice
+        options:
+          - admin-only
+          - mock
+      confirm:
+        description: "Type CONFIRM to proceed (this clears all data)"
+        required: true
+        type: string
+
+jobs:
+  seed:
+    name: Seed (${{ github.event.inputs.mode }})
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate confirmation
+        env:
+          CONFIRM_INPUT: ${{ github.event.inputs.confirm }}
+        run: |
+          if [ "$CONFIRM_INPUT" != "CONFIRM" ]; then
+            echo "❌ You must type CONFIRM in the confirm field. Aborting."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Seed via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          SEED_MODE: ${{ github.event.inputs.mode }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          envs: SEED_MODE,POSTGRES_USER,POSTGRES_PASSWORD
+          script: |
+            set -e
+            cd /opt/lms
+
+            # Pull latest scripts in case config changed
+            git pull origin main
+
+            # Install seed script dependencies into an isolated venv
+            python3 -m venv /opt/lms/.seed-venv
+            /opt/lms/.seed-venv/bin/pip install -q -r scripts/requirements.txt
+
+            # Run the seed script against the production databases
+            /opt/lms/.seed-venv/bin/python scripts/seed.py \
+              --mode "$SEED_MODE" \
+              --config scripts/seed_config.json \
+              --auth-db-url "postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/auth_db" \
+              --core-db-url "postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/core_db"
+
+      - name: Summary
+        env:
+          SEED_MODE: ${{ github.event.inputs.mode }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          echo "## Seed complete" >> $GITHUB_STEP_SUMMARY
+          echo "Mode: \`$SEED_MODE\`" >> $GITHUB_STEP_SUMMARY
+          echo "Triggered by: @$ACTOR" >> $GITHUB_STEP_SUMMARY

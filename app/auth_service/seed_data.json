@@ -1,0 +1,15 @@
+{
+    "tenants": [],
+    "groups": [],
+    "users": [
+        {
+            "email": "admin@cpvmtraining.com",
+            "username": "sysadmin",
+            "full_name": "Global Admin",
+            "is_sysadmin": true,
+            "theme_preference": "system",
+            "status": "ACTIVE"
+        }
+    ],
+    "trainings": []
+}

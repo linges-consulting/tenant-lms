@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html>
+<head><title>New Training Assigned</title></head>
+<body>
+<h2>New Training Assigned</h2>
+<p>You have been assigned: <strong>{{ training_title }}</strong></p>
+{% if due_date %}<p>Due date: {{ due_date }}</p>{% endif %}
+<a href="{{ frontend_url }}/dashboard">Start Training</a>
+</body>
+</html>

@@ -1,0 +1,1926 @@
+"""
+Training endpoint tests — Phase 3 Task 2.
+
+Auth pattern:
+  The core service validates JWTs via an outbound HTTP call to auth-service.
+  Tests must override get_current_user AND get_current_tenant_id directly
+  via app.dependency_overrides — Bearer tokens have no effect here.
+"""
+
+import pytest
+import uuid
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
+
+from app.main import app
+from app.api.deps import get_current_user, get_current_tenant_id
+from app.models.training import Training
+from app.models.chapter import Chapter, ContentType
+from app.models.enrollment import Enrollment
+from app.models.assignment import TrainingAssignment
+from app.models.collaborator import TrainingCollaborator
+from tests.conftest import override_current_user, make_user_auth
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_creator(tenant_id: str):
+    """Return a UserAuth object for a Training Creator in the given tenant."""
+    return make_user_auth(
+        user_id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        roles=["Training Creator"],
+    )
+
+
+def _set_user(user):
+    """Install dependency overrides for current user and tenant_id."""
+    tenant_id = user.tenant_id
+
+    app.dependency_overrides[get_current_user] = override_current_user(user)
+
+    async def _tenant_id():
+        return tenant_id
+
+    app.dependency_overrides[get_current_tenant_id] = _tenant_id
+
+
+def _clear_overrides():
+    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_tenant_id, None)
+
+
+# ---------------------------------------------------------------------------
+# T-CO-01: Creating a training without category returns 422
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_create_training_requires_category(client, db_session):
+    """Omitting 'category' must produce a 422 Unprocessable Entity."""
+    tenant_id = str(uuid.uuid4())
+    user = _make_creator(tenant_id)
+    _set_user(user)
+    try:
+        resp = await client.post(
+            "/api/v1/trainings",
+            json={
+                "title": "No Category Training",
+                "description": "desc",
+                "structure_type": "flat",
+                "requires_certificate": False,
+            },
+        )
+        assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-CT-01: Creating a training with a valid category succeeds
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_create_training_with_category(client, db_session):
+    """Training with all required fields should be created successfully (201)."""
+    tenant_id = str(uuid.uuid4())
+    user = _make_creator(tenant_id)
+    _set_user(user)
+    try:
+        resp = await client.post(
+            "/api/v1/trainings",
+            json={
+                "title": "Safety Training",
+                "description": "A safety course.",
+                "category": "Safety",
+                "structure_type": "flat",
+                "requires_certificate": False,
+            },
+        )
+        assert resp.status_code in (200, 201), f"Expected 200/201, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["category"] == "Safety"
+        assert data["structure_type"] == "flat"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-CT-02: Tags are stored and returned
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_create_training_with_tags(client, db_session):
+    """Tags provided at creation must appear in the response."""
+    tenant_id = str(uuid.uuid4())
+    user = _make_creator(tenant_id)
+    _set_user(user)
+    try:
+        resp = await client.post(
+            "/api/v1/trainings",
+            json={
+                "title": "Tagged Training",
+                "description": "desc",
+                "category": "HR",
+                "structure_type": "flat",
+                "tags": ["onboarding", "compliance"],
+                "requires_certificate": False,
+            },
+        )
+        assert resp.status_code in (200, 201), f"Expected 200/201, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert "onboarding" in data["tags"]
+        assert "compliance" in data["tags"]
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-CO-38: structure_type column is kept but no longer enforced as immutable
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_structure_type_can_be_updated(client, db_session):
+    """structure_type is no longer immutable — updating it via PUT must succeed."""
+    tenant_id = str(uuid.uuid4())
+    user = _make_creator(tenant_id)
+    _set_user(user)
+    try:
+        # Create the training
+        create_resp = await client.post(
+            "/api/v1/trainings",
+            json={
+                "title": "Flat Training",
+                "description": "desc",
+                "category": "IT",
+                "structure_type": "flat",
+                "requires_certificate": False,
+            },
+        )
+        assert create_resp.status_code in (200, 201), (
+            f"Create failed: {create_resp.status_code}: {create_resp.text}"
+        )
+        training_id = create_resp.json()["id"]
+
+        # structure_type can now be changed — expect success
+        put_resp = await client.put(
+            f"/api/v1/trainings/{training_id}",
+            json={
+                "title": "Flat Training",
+                "category": "IT",
+                "structure_type": "modular",
+                "requires_certificate": False,
+            },
+        )
+        assert put_resp.status_code in (200, 201), (
+            f"Expected 200, got {put_resp.status_code}: {put_resp.text}"
+        )
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-CO-ASSIGN-01 (BR-301a): Training Creator cannot bulk-assign trainings
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_training_creator_cannot_bulk_assign(client, db_session):
+    """
+    BR-301a: Training Creators build content; only Business Managers and SysAdmins
+    can assign trainings. A Training Creator hitting the bulk-assign endpoint must
+    receive 403 Forbidden.
+    """
+    tenant_id = str(uuid.uuid4())
+
+    # Create training as a creator first (so the training exists)
+    creator = make_user_auth(
+        user_id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        roles=["Training Creator"],
+    )
+    _set_user(creator)
+    try:
+        create_resp = await client.post(
+            "/api/v1/trainings",
+            json={
+                "title": "Creator's Training",
+                "description": "desc",
+                "category": "Safety",
+                "structure_type": "flat",
+                "requires_certificate": False,
+            },
+        )
+        assert create_resp.status_code in (200, 201), (
+            f"Training creation failed: {create_resp.status_code}: {create_resp.text}"
+        )
+        training_id = create_resp.json()["id"]
+    finally:
+        _clear_overrides()
+
+    # Now attempt to bulk-assign as Training Creator — must be 403
+    _set_user(creator)
+    try:
+        assign_resp = await client.post(
+            f"/api/v1/trainings/{training_id}/assignments/bulk",
+            json={
+                "user_ids": [str(uuid.uuid4())],
+                "group_ids": [],
+            },
+        )
+        assert assign_resp.status_code == 403, (
+            f"Expected 403 for Training Creator bulk-assign, got {assign_resp.status_code}: {assign_resp.text}"
+        )
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-CO-ASSIGN-02 (BR-301a): Business Manager can bulk-assign trainings
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_business_manager_can_bulk_assign(client, db_session):
+    """
+    BR-301a: Business Managers are authorized to assign trainings.
+    Training must be published before assignment is allowed.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator_id = str(uuid.uuid4())
+
+    # Insert a published training directly so assignment is allowed
+    training = Training(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        title="Manager Assignable Training",
+        description="desc",
+        category="HR",
+        structure_type="flat",
+        is_published=True,
+        is_active=True,
+        is_archived=False,
+        is_ready=True,
+        requires_certificate=False,
+        created_by_id=creator_id,
+    )
+    db_session.add(training)
+    await db_session.commit()
+    training_id = training.id
+
+    # Business Manager assigns
+    manager = make_user_auth(
+        user_id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        roles=["Business Manager"],
+    )
+    _set_user(manager)
+    try:
+        assign_resp = await client.post(
+            f"/api/v1/trainings/{training_id}/assignments/bulk",
+            json={
+                "user_ids": [str(uuid.uuid4())],
+                "group_ids": [],
+            },
+        )
+        assert assign_resp.status_code == 200, (
+            f"Expected 200 for Business Manager bulk-assign, got {assign_resp.status_code}: {assign_resp.text}"
+        )
+    finally:
+        _clear_overrides()
+
+
+async def test_sysadmin_can_bulk_assign(client, db_session):
+    """T-CO-ASSIGN-03: SysAdmin can bulk-assign trainings (BR-301a).
+    Training must be published before assignment is allowed.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator_id = str(uuid.uuid4())
+
+    # Insert a published training directly so assignment is allowed
+    training = Training(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        title="SysAdmin Training",
+        description="desc",
+        category="IT",
+        structure_type="flat",
+        is_published=True,
+        is_active=True,
+        is_archived=False,
+        is_ready=True,
+        requires_certificate=False,
+        created_by_id=creator_id,
+    )
+    db_session.add(training)
+    await db_session.commit()
+    training_id = training.id
+
+    # SysAdmin assigns
+    _set_user(make_user_auth(str(uuid.uuid4()), tenant_id, ["SysAdmin"]))
+    try:
+        assign_resp = await client.post(
+            f"/api/v1/trainings/{training_id}/assignments/bulk",
+            json={"user_ids": [str(uuid.uuid4())], "group_ids": []},
+        )
+        assert assign_resp.status_code == 200, (
+            f"Expected 200 for SysAdmin bulk-assign, got {assign_resp.status_code}: {assign_resp.text}"
+        )
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-CT-03: Filter trainings by category
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_list_trainings_filter_by_category(client, db_session):
+    """
+    T-CT-03: GET /api/v1/trainings/manager?category=Safety must return only
+    trainings whose category matches 'Safety', excluding those with a different
+    category (e.g. 'HR').
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    # Mock enrich helper so no outbound HTTP is made
+    with patch("app.api.v1.endpoints.trainings.deps.get_users_batch", new_callable=AsyncMock) as mock_batch:
+        mock_batch.return_value = {}
+
+        # Seed two trainings with different categories directly in db_session
+        safety_training = Training(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            title="Safety Basics",
+            description="Safety course",
+            category="Safety",
+            structure_type="flat",
+            is_published=False,
+            is_active=True,
+            is_archived=False,
+            requires_certificate=False,
+            created_by_id=creator.id,
+        )
+        hr_training = Training(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            title="HR Onboarding",
+            description="HR course",
+            category="HR",
+            structure_type="flat",
+            is_published=False,
+            is_active=True,
+            is_archived=False,
+            requires_certificate=False,
+            created_by_id=creator.id,
+        )
+        db_session.add(safety_training)
+        db_session.add(hr_training)
+        await db_session.commit()
+
+        _set_user(creator)
+        try:
+            resp = await client.get("/api/v1/trainings/manager?category=Safety")
+            assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+            data = resp.json()
+            titles = [t["title"] for t in data]
+            assert "Safety Basics" in titles, f"Safety training missing from response: {titles}"
+            assert "HR Onboarding" not in titles, f"HR training should not appear: {titles}"
+        finally:
+            _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-CT-04: Filter trainings by status=published
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_list_trainings_filter_by_status_published(client, db_session):
+    """
+    T-CT-04: GET /api/v1/trainings/manager?status=published must return only
+    published trainings, excluding drafts.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    with patch("app.api.v1.endpoints.trainings.deps.get_users_batch", new_callable=AsyncMock) as mock_batch:
+        mock_batch.return_value = {}
+
+        published_training = Training(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            title="Published Course",
+            description="A published course",
+            category="Compliance",
+            structure_type="flat",
+            is_published=True,
+            is_active=True,
+            is_archived=False,
+            requires_certificate=False,
+            created_by_id=creator.id,
+        )
+        draft_training = Training(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            title="Draft Course",
+            description="A draft course",
+            category="Compliance",
+            structure_type="flat",
+            is_published=False,
+            is_active=True,
+            is_archived=False,
+            requires_certificate=False,
+            created_by_id=creator.id,
+        )
+        db_session.add(published_training)
+        db_session.add(draft_training)
+        await db_session.commit()
+
+        _set_user(creator)
+        try:
+            resp = await client.get("/api/v1/trainings/manager?status=published")
+            assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+            data = resp.json()
+            titles = [t["title"] for t in data]
+            assert "Published Course" in titles, f"Published training missing: {titles}"
+            assert "Draft Course" not in titles, f"Draft training should not appear: {titles}"
+        finally:
+            _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# Helper: seed a draft training directly into db_session
+# ---------------------------------------------------------------------------
+
+def _make_draft_training(tenant_id: str, created_by_id: str, **kwargs) -> Training:
+    """Build a Training ORM object in Draft state (is_ready=False, is_published=False, is_archived=False)."""
+    defaults = dict(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        title="Test Training",
+        description="A test description",
+        category="Safety",
+        structure_type="flat",
+        is_published=False,
+        is_active=True,
+        is_archived=False,
+        is_ready=False,
+        requires_certificate=False,
+        created_by_id=created_by_id,
+    )
+    defaults.update(kwargs)
+    return Training(**defaults)
+
+
+def _make_chapter(training_id: str, tenant_id: str) -> Chapter:
+    """Build a minimal Chapter ORM object."""
+    return Chapter(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        training_id=training_id,
+        title="Chapter One",
+        content_type=ContentType.RICH_TEXT,
+        content_data={"text": "hello"},
+        sequence_order=1,
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-MR-01: mark-ready succeeds when all conditions are met
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mark_ready_success(client, db_session):
+    """
+    BR-305a: POST /trainings/{id}/mark-ready returns 200 and lifecycle_status=="ready"
+    when the training has title, description, category, and at least one chapter.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id)
+    chapter = _make_chapter(training.id, tenant_id)
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/mark-ready")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["is_ready"] is True, f"is_ready should be True: {data}"
+        assert data["lifecycle_status"] == "ready", f"lifecycle_status should be 'ready': {data}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-MR-02: mark-ready succeeds when training has no description (description is optional)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mark_ready_succeeds_without_description(client, db_session):
+    """BR-305a (updated): Description is not required for mark-ready — title + category + ≥1 chapter suffice."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id, description=None)
+    chapter = _make_chapter(training.id, tenant_id)
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/mark-ready")
+        assert resp.status_code == 200, f"Expected 200 (description optional), got {resp.status_code}: {resp.text}"
+        assert resp.json()["is_ready"] is True
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-MR-03: mark-ready fails when training has no chapter
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mark_ready_fails_without_chapter(client, db_session):
+    """BR-305a: Training with no chapters must return 400."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/mark-ready")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+        assert "lesson" in resp.json()["detail"].lower(), f"Error should mention lesson: {resp.json()}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-MR-04: mark-ready fails when called by a non-owner
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mark_ready_non_owner_forbidden(client, db_session):
+    """BR-305a: A Training Creator who is not the owner must receive 403."""
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    other_creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, owner.id)
+    chapter = _make_chapter(training.id, tenant_id)
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    # other_creator is NOT the owner
+    _set_user(other_creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/mark-ready")
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-MR-05: mark-ready fails when training is already in Ready state
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mark_ready_already_ready_fails(client, db_session):
+    """BR-305a: Calling mark-ready on an already-ready training must return 400."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id, is_ready=True)
+    chapter = _make_chapter(training.id, tenant_id)
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/mark-ready")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-MR-06: mark-ready fails when training is published
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mark_ready_already_published_fails(client, db_session):
+    """BR-305a: Calling mark-ready on a published training must return 400."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id, is_published=True)
+    chapter = _make_chapter(training.id, tenant_id)
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/mark-ready")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-MR-06b: mark-ready fails when training is archived
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mark_ready_already_archived_fails(client, db_session):
+    """BR-305a: Calling mark-ready on an archived training must return 400."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id, is_archived=True)
+    chapter = _make_chapter(training.id, tenant_id)
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/mark-ready")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-MR-07: mark-ready on a non-existent training returns 404
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mark_ready_not_found(client, db_session):
+    """mark-ready on an unknown training ID must return 404."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{uuid.uuid4()}/mark-ready")
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-MR-08: mark-ready fails when training has no title
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mark_ready_fails_without_title(client, db_session):
+    """BR-305a: Training with no title must return 400."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id, title="")
+    chapter = _make_chapter(training.id, tenant_id)
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/mark-ready")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-MR-09: mark-ready fails when training has no category
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mark_ready_fails_without_category(client, db_session):
+    """BR-305a: Training with no category must return 400."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id, category="")
+    chapter = _make_chapter(training.id, tenant_id)
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/mark-ready")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# Helpers for send-to-draft tests
+# ---------------------------------------------------------------------------
+
+def _make_ready_training(tenant_id: str, created_by_id: str, **kwargs) -> Training:
+    """Build a Training ORM object in Ready state (is_ready=True, is_published=False, is_archived=False)."""
+    defaults = dict(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        title="Ready Training",
+        description="A ready description",
+        category="Safety",
+        structure_type="flat",
+        is_published=False,
+        is_active=True,
+        is_archived=False,
+        is_ready=True,
+        requires_certificate=False,
+        created_by_id=created_by_id,
+    )
+    defaults.update(kwargs)
+    return Training(**defaults)
+
+
+def _make_manager(tenant_id: str):
+    """Return a UserAuth object for a Business Manager in the given tenant."""
+    return make_user_auth(
+        user_id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        roles=["Business Manager"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-SD-01: send-to-draft succeeds for the owner Training Creator
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_send_to_draft_owner_success(client, db_session):
+    """
+    BR-301a: Owner Training Creator can send a Ready training back to Draft.
+    Response must be 200 and lifecycle_status == 'draft'.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_ready_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/send-to-draft")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["is_ready"] is False, f"is_ready should be False: {data}"
+        assert data["lifecycle_status"] == "draft", f"lifecycle_status should be 'draft': {data}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-SD-02: send-to-draft succeeds for a Business Manager (non-owner)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_send_to_draft_manager_success(client, db_session):
+    """
+    BR-301a: A Business Manager who is NOT the training owner can send a
+    Ready training back to Draft.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+
+    # Manager is a different user from the creator
+    training = _make_ready_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/send-to-draft")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["is_ready"] is False, f"is_ready should be False: {data}"
+        assert data["lifecycle_status"] == "draft", f"lifecycle_status should be 'draft': {data}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-SD-03: send-to-draft fails when training is in Draft state (not Ready)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_send_to_draft_not_ready_fails(client, db_session):
+    """
+    BR-301a: Calling send-to-draft on a Draft training (is_ready=False) must
+    return 400.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id)  # is_ready=False
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/send-to-draft")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+        assert "ready" in resp.json()["detail"].lower(), f"Error should mention ready state: {resp.json()}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-SD-04: send-to-draft from Published state — Manager succeeds
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_send_to_draft_from_published_manager_success(client, db_session):
+    """
+    BR-301a: A Business Manager can send a Published training back to Draft.
+    Response must be 200 and lifecycle_status == 'draft'.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+
+    # Published training: is_published=True, is_ready=False
+    training = _make_draft_training(tenant_id, creator.id, is_published=True)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/send-to-draft")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["is_published"] is False, f"is_published should be False: {data}"
+        assert data["is_ready"] is False, f"is_ready should be False: {data}"
+        assert data["lifecycle_status"] == "draft", f"lifecycle_status should be 'draft': {data}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-SD-04b: send-to-draft from Published state — Creator is forbidden
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_send_to_draft_from_published_creator_forbidden(client, db_session):
+    """
+    BR-301a: A Training Creator (even the owner) cannot unpublish a training.
+    Must return 403.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    # Published training: is_published=True, is_ready=False
+    training = _make_draft_training(tenant_id, creator.id, is_published=True)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/send-to-draft")
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-SD-04c: send-to-draft on an Archived training returns 400
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_send_to_draft_archived_fails(client, db_session):
+    """
+    BR-301a: Calling send-to-draft on an Archived training must return 400.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id, is_archived=True)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/send-to-draft")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+        assert "archived" in resp.json()["detail"].lower(), f"Error should mention archived: {resp.json()}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-SD-05: send-to-draft fails for a non-owner Training Creator
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_send_to_draft_non_owner_creator_forbidden(client, db_session):
+    """
+    BR-301a: A Training Creator who is NOT the owner must receive 403.
+    """
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    other_creator = _make_creator(tenant_id)
+
+    training = _make_ready_training(tenant_id, owner.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    # other_creator is NOT the owner
+    _set_user(other_creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/send-to-draft")
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-SD-06: send-to-draft on a non-existent training returns 404
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_send_to_draft_not_found(client, db_session):
+    """send-to-draft on an unknown training ID must return 404."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{uuid.uuid4()}/send-to-draft")
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# Helpers for publish / archive tests
+# ---------------------------------------------------------------------------
+
+def _make_manager(tenant_id: str):
+    """Return a UserAuth object for a Business Manager in the given tenant."""
+    return make_user_auth(
+        user_id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        roles=["Business Manager"],
+    )
+
+
+def _make_ready_training(tenant_id: str, created_by_id: str, **kwargs) -> Training:
+    """Build a Training ORM object in Ready state."""
+    defaults = dict(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        title="Ready Training",
+        description="A ready description",
+        category="Safety",
+        structure_type="flat",
+        is_published=False,
+        is_active=True,
+        is_archived=False,
+        is_ready=True,
+        requires_certificate=False,
+        created_by_id=created_by_id,
+    )
+    defaults.update(kwargs)
+    return Training(**defaults)
+
+
+def _make_published_training(tenant_id: str, created_by_id: str, **kwargs) -> Training:
+    """Build a Training ORM object in Published state."""
+    defaults = dict(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        title="Published Training",
+        description="A published description",
+        category="Safety",
+        structure_type="flat",
+        is_published=True,
+        is_active=True,
+        is_archived=False,
+        is_ready=True,
+        requires_certificate=False,
+        created_by_id=created_by_id,
+    )
+    defaults.update(kwargs)
+    return Training(**defaults)
+
+
+def _make_enrollment(training_id: str, tenant_id: str, user_id: str, is_completed: bool = False) -> Enrollment:
+    """Build an Enrollment ORM object."""
+    return Enrollment(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        user_id=user_id,
+        training_id=training_id,
+        is_completed=is_completed,
+    )
+
+
+def _make_assignment(training_id: str, tenant_id: str, user_id: str, due_date=None) -> TrainingAssignment:
+    """Build a TrainingAssignment ORM object."""
+    return TrainingAssignment(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        training_id=training_id,
+        user_id=user_id,
+        due_date=due_date,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Publish endpoint tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_publish_success(client, db_session):
+    """Manager can publish a Ready training → 200, lifecycle_status == 'published'."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+
+    training = _make_ready_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/publish")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["is_published"] is True, f"is_published should be True: {data}"
+        assert data["lifecycle_status"] == "published", f"lifecycle_status should be 'published': {data}"
+        assert data["version"] == 2, f"version should be incremented to 2 (from default 1): {data}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_publish_not_ready_fails(client, db_session):
+    """Attempting to publish a Draft training (is_ready=False) must return 400."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/publish")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_publish_creator_forbidden(client, db_session):
+    """Training Creator (not a Manager) attempting to publish must receive 403."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_ready_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/publish")
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_publish_already_published_fails(client, db_session):
+    """Attempting to publish an already-published training must return 400."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+
+    training = _make_published_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/publish")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# Archive endpoint tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_archive_success(client, db_session):
+    """Manager can archive a Published training with no blocking enrollments → 200, lifecycle_status == 'archived'."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+
+    training = _make_published_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/archive")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["is_archived"] is True, f"is_archived should be True: {data}"
+        assert data["lifecycle_status"] == "archived", f"lifecycle_status should be 'archived': {data}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_archive_not_published_fails(client, db_session):
+    """Attempting to archive a Draft training must return 400."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/archive")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_archive_gate_blocks_active_learner(client, db_session):
+    """BR-503: Archive must be blocked if any learner has an incomplete assignment with a future due_date."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+    learner_id = str(uuid.uuid4())
+
+    training = _make_published_training(tenant_id, creator.id)
+    enrollment = _make_enrollment(training.id, tenant_id, learner_id, is_completed=False)
+    future_due = datetime.now(timezone.utc) + timedelta(days=30)
+    assignment = _make_assignment(training.id, tenant_id, learner_id, due_date=future_due)
+
+    db_session.add(training)
+    db_session.add(enrollment)
+    db_session.add(assignment)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/archive")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+        assert "Cannot archive" in resp.json()["detail"], f"Error detail mismatch: {resp.json()}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_archive_creator_forbidden(client, db_session):
+    """Training Creator (not a Manager) attempting to archive must receive 403."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_published_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/archive")
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_archive_gate_allows_when_all_completed(client, db_session):
+    """BR-503: Archive must succeed when all enrolled learners have completed the training."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+    learner_id = str(uuid.uuid4())
+
+    training = _make_published_training(tenant_id, creator.id)
+    # Enrollment is completed — no blocking reason
+    enrollment = _make_enrollment(training.id, tenant_id, learner_id, is_completed=True)
+    future_due = datetime.now(timezone.utc) + timedelta(days=30)
+    assignment = _make_assignment(training.id, tenant_id, learner_id, due_date=future_due)
+
+    db_session.add(training)
+    db_session.add(enrollment)
+    db_session.add(assignment)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/archive")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["is_archived"] is True, f"is_archived should be True: {data}"
+        assert data["lifecycle_status"] == "archived", f"lifecycle_status should be 'archived': {data}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_archive_gate_allows_when_due_date_passed(client, db_session):
+    """BR-503: Archive must succeed when the assignment due_date is in the past (even if incomplete)."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+    learner_id = str(uuid.uuid4())
+
+    training = _make_published_training(tenant_id, creator.id)
+    # Enrollment is NOT completed, but the due_date is in the past — not blocking
+    enrollment = _make_enrollment(training.id, tenant_id, learner_id, is_completed=False)
+    past_due = datetime.now(timezone.utc) - timedelta(days=5)
+    assignment = _make_assignment(training.id, tenant_id, learner_id, due_date=past_due)
+
+    db_session.add(training)
+    db_session.add(enrollment)
+    db_session.add(assignment)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/archive")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["is_archived"] is True, f"is_archived should be True: {data}"
+        assert data["lifecycle_status"] == "archived", f"lifecycle_status should be 'archived': {data}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# C8: GET /{id}/structure must include all Training fields
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_structure_includes_tags(client, db_session):
+    """GET /structure must return tags set on the training."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = Training(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        title="Tagged Training",
+        description="desc",
+        category="Safety",
+        structure_type="flat",
+        is_published=True,
+        is_active=True,
+        is_archived=False,
+        is_ready=True,
+        requires_certificate=False,
+        tags=["onboarding", "compliance"],
+        created_by_id=creator.id,
+    )
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.get(f"/api/v1/trainings/{training.id}/structure")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert "tags" in data, "Response must include 'tags' field"
+        assert set(data["tags"]) == {"onboarding", "compliance"}, f"Unexpected tags: {data['tags']}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_get_structure_includes_category(client, db_session):
+    """GET /structure must return the category set on the training."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = Training(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        title="Category Training",
+        description="desc",
+        category="Compliance",
+        structure_type="flat",
+        is_published=True,
+        is_active=True,
+        is_archived=False,
+        is_ready=True,
+        requires_certificate=True,
+        tags=[],
+        created_by_id=creator.id,
+    )
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.get(f"/api/v1/trainings/{training.id}/structure")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data.get("category") == "Compliance", f"Expected category='Compliance', got: {data.get('category')}"
+        assert data.get("requires_certificate") is True, f"Expected requires_certificate=True, got: {data.get('requires_certificate')}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_get_structure_includes_is_ready(client, db_session):
+    """GET /structure must return is_ready=True when the training is in Ready state."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = Training(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        title="Ready Training",
+        description="desc",
+        category="IT",
+        structure_type="flat",
+        is_published=False,
+        is_active=True,
+        is_archived=False,
+        is_ready=True,
+        requires_certificate=False,
+        tags=[],
+        created_by_id=creator.id,
+    )
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.get(f"/api/v1/trainings/{training.id}/structure")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data.get("is_ready") is True, f"Expected is_ready=True, got: {data.get('is_ready')}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_get_structure_includes_lifecycle_status(client, db_session):
+    """GET /structure must include lifecycle_status='draft' for an unpublished training."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = Training(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        title="Draft Training",
+        description="desc",
+        category="HR",
+        structure_type="flat",
+        is_published=False,
+        is_active=True,
+        is_archived=False,
+        is_ready=False,
+        requires_certificate=False,
+        tags=[],
+        created_by_id=creator.id,
+    )
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.get(f"/api/v1/trainings/{training.id}/structure")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data.get("lifecycle_status") == "draft", (
+            f"Expected lifecycle_status='draft', got: {data.get('lifecycle_status')}"
+        )
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# COL1: Draft-only edit lock on chapter endpoints (BR-301, BR-302)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_create_chapter_allowed_when_draft(client, db_session):
+    """BR-301: Owner can add a chapter to a Draft training (is_ready=False, is_published=False)."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(
+            f"/api/v1/trainings/{training.id}/chapters",
+            json={"title": "New Chapter", "content_type": "RICH_TEXT", "content_data": {}, "sequence_order": 1},
+        )
+        assert resp.status_code in (200, 201), f"Expected 200/201, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_create_chapter_blocked_when_ready(client, db_session):
+    """BR-301: Cannot add a chapter when training is in Ready state (is_ready=True) — must return 403."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id, is_ready=True)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(
+            f"/api/v1/trainings/{training.id}/chapters",
+            json={"title": "New Chapter", "content_type": "RICH_TEXT", "content_data": {}, "sequence_order": 1},
+        )
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_create_chapter_blocked_when_published(client, db_session):
+    """BR-301: Cannot add a chapter when training is Published — must return 403."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id, is_published=True)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(
+            f"/api/v1/trainings/{training.id}/chapters",
+            json={"title": "New Chapter", "content_type": "RICH_TEXT", "content_data": {}, "sequence_order": 1},
+        )
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_create_chapter_blocked_when_archived(client, db_session):
+    """BR-301: Cannot add a chapter when training is Archived — must return 403."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id, is_archived=True)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(
+            f"/api/v1/trainings/{training.id}/chapters",
+            json={"title": "New Chapter", "content_type": "RICH_TEXT", "content_data": {}, "sequence_order": 1},
+        )
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_update_chapter_blocked_when_ready(client, db_session):
+    """BR-301: Cannot update a chapter when training is in Ready state — must return 403."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id, is_ready=True)
+    chapter = _make_chapter(training.id, tenant_id)
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.patch(
+            f"/api/v1/trainings/{training.id}/chapters/{chapter.id}",
+            json={"title": "Updated Title"},
+        )
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_delete_chapter_blocked_when_ready(client, db_session):
+    """BR-301: Cannot delete a chapter when training is in Ready state — must return 403."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, creator.id, is_ready=True)
+    chapter = _make_chapter(training.id, tenant_id)
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.delete(
+            f"/api/v1/trainings/{training.id}/chapters/{chapter.id}",
+        )
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_collaborator_can_edit_draft(client, db_session):
+    """BR-302: A collaborator on a Draft training can create a chapter."""
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    collaborator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, owner.id)
+    collab_record = TrainingCollaborator(training_id=training.id, user_id=collaborator.id)
+    db_session.add(training)
+    db_session.add(collab_record)
+    await db_session.commit()
+
+    _set_user(collaborator)
+    try:
+        resp = await client.post(
+            f"/api/v1/trainings/{training.id}/chapters",
+            json={"title": "Collab Chapter", "content_type": "RICH_TEXT", "content_data": {}, "sequence_order": 1},
+        )
+        assert resp.status_code in (200, 201), f"Expected 200/201, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_collaborator_blocked_from_editing_ready_training(client, db_session):
+    """BR-302: Collaborator cannot edit a Ready training — must return 403."""
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    collaborator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, owner.id, is_ready=True)
+    collab_record = TrainingCollaborator(training_id=training.id, user_id=collaborator.id)
+    db_session.add(training)
+    db_session.add(collab_record)
+    await db_session.commit()
+
+    _set_user(collaborator)
+    try:
+        resp = await client.post(
+            f"/api/v1/trainings/{training.id}/chapters",
+            json={"title": "Collab Chapter", "content_type": "RICH_TEXT", "content_data": {}, "sequence_order": 1},
+        )
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_non_owner_non_collaborator_blocked(client, db_session):
+    """BR-301/BR-302: A Training Creator who is neither owner nor collaborator must be 403 on Draft too."""
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    other_creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, owner.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(other_creator)
+    try:
+        resp = await client.post(
+            f"/api/v1/trainings/{training.id}/chapters",
+            json={"title": "Unauthorized Chapter", "content_type": "RICH_TEXT", "content_data": {}, "sequence_order": 1},
+        )
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# COL2: Add/remove collaborator allowed at any training state (BR-302)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_add_collaborator_allowed_when_ready(client, db_session):
+    """BR-302: Owner can add a collaborator to a Ready training (not just Draft)."""
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    collaborator = _make_creator(tenant_id)
+
+    training = _make_ready_training(tenant_id, owner.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(owner)
+    try:
+        with patch("app.core.events.publisher.publish_event", new_callable=AsyncMock):
+            resp = await client.post(
+                f"/api/v1/trainings/{training.id}/collaborators",
+                json=[collaborator.id],
+            )
+        assert resp.status_code in (200, 201), f"Expected 200/201, got {resp.status_code}: {resp.text}"
+        ids = [c["user_id"] for c in resp.json()]
+        assert collaborator.id in ids
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_add_collaborator_allowed_when_published(client, db_session):
+    """BR-302: Owner can add a collaborator to a Published training."""
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    collaborator = _make_creator(tenant_id)
+
+    training = _make_published_training(tenant_id, owner.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(owner)
+    try:
+        with patch("app.core.events.publisher.publish_event", new_callable=AsyncMock):
+            resp = await client.post(
+                f"/api/v1/trainings/{training.id}/collaborators",
+                json=[collaborator.id],
+            )
+        assert resp.status_code in (200, 201), f"Expected 200/201, got {resp.status_code}: {resp.text}"
+        ids = [c["user_id"] for c in resp.json()]
+        assert collaborator.id in ids
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_remove_collaborator_allowed_when_ready(client, db_session):
+    """BR-302: Owner can remove a collaborator from a Ready training."""
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    collaborator = _make_creator(tenant_id)
+
+    training = _make_ready_training(tenant_id, owner.id)
+    collab_record = TrainingCollaborator(training_id=training.id, user_id=collaborator.id)
+    db_session.add(training)
+    db_session.add(collab_record)
+    await db_session.commit()
+
+    _set_user(owner)
+    try:
+        resp = await client.delete(
+            f"/api/v1/trainings/{training.id}/collaborators/{collaborator.id}",
+        )
+        assert resp.status_code in (200, 204), f"Expected 200/204, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_add_collaborator_publishes_notification_event(client, db_session):
+    """BR-302a: Adding a collaborator publishes a COLLABORATOR_ADDED event."""
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    collaborator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, owner.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(owner)
+    try:
+        with patch("app.core.events.publisher.publish_event", new_callable=AsyncMock) as mock_publish:
+            resp = await client.post(
+                f"/api/v1/trainings/{training.id}/collaborators",
+                json=[collaborator.id],
+            )
+            assert resp.status_code in (200, 201), f"Expected 200/201, got {resp.status_code}: {resp.text}"
+            # Verify COLLABORATOR_ADDED event was published
+            calls = [call for call in mock_publish.call_args_list if call.args[0] == "COLLABORATOR_ADDED"]
+            assert len(calls) >= 1, f"Expected COLLABORATOR_ADDED event, got calls: {mock_publish.call_args_list}"
+            payload = calls[0].args[1]
+            assert payload["collaborator_user_id"] == collaborator.id
+            assert payload["training_id"] == training.id
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# BR-309a: Role-filtered audit endpoint
+# ---------------------------------------------------------------------------
+
+def _make_audit_log(tenant_id: str, training_id: str, action: str, user_id: str = None):
+    """Build an AuditLog ORM object for a training-level event."""
+    from app.models.audit_log import AuditLog
+    return AuditLog(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        user_id=user_id or str(uuid.uuid4()),
+        action=action,
+        entity_type="training",
+        entity_id=training_id,
+        metadata_json=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_audit_owner_sees_all_events(client, db_session):
+    """
+    BR-309a: Training owner (Creator who created it) sees ALL audit events,
+    including non-state-transition events like COLLABORATOR_ADDED.
+    """
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, owner.id)
+    db_session.add(training)
+
+    log_state = _make_audit_log(tenant_id, training.id, "MARK_READY", owner.id)
+    log_collab = _make_audit_log(tenant_id, training.id, "COLLABORATOR_ADDED", owner.id)
+    db_session.add(log_state)
+    db_session.add(log_collab)
+    await db_session.commit()
+
+    _set_user(owner)
+    try:
+        resp = await client.get(f"/api/v1/trainings/{training.id}/audit")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        actions = [e["action"] for e in resp.json()]
+        assert "MARK_READY" in actions, "Owner should see MARK_READY"
+        assert "COLLABORATOR_ADDED" in actions, "Owner should see COLLABORATOR_ADDED"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_audit_collaborator_sees_all_events(client, db_session):
+    """
+    BR-309a: Active collaborator sees ALL audit events for that training.
+    """
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    collab_user = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, owner.id)
+    db_session.add(training)
+
+    collaborator_row = TrainingCollaborator(
+        training_id=training.id,
+        user_id=collab_user.id,
+    )
+    db_session.add(collaborator_row)
+
+    log_state = _make_audit_log(tenant_id, training.id, "MARK_READY", owner.id)
+    log_collab = _make_audit_log(tenant_id, training.id, "COLLABORATOR_ADDED", owner.id)
+    db_session.add(log_state)
+    db_session.add(log_collab)
+    await db_session.commit()
+
+    _set_user(collab_user)
+    try:
+        resp = await client.get(f"/api/v1/trainings/{training.id}/audit")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        actions = [e["action"] for e in resp.json()]
+        assert "MARK_READY" in actions, "Collaborator should see MARK_READY"
+        assert "COLLABORATOR_ADDED" in actions, "Collaborator should see COLLABORATOR_ADDED"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_audit_manager_sees_only_state_transitions(client, db_session):
+    """
+    BR-309a: Business Manager who is NOT the owner or collaborator sees only
+    state-transition events (MARK_READY, SEND_TO_DRAFT, PUBLISH, UNPUBLISH, ARCHIVE).
+    Non-state events like COLLABORATOR_ADDED must be filtered out.
+    """
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    manager = make_user_auth(
+        user_id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        roles=["Business Manager"],
+    )
+
+    training = _make_draft_training(tenant_id, owner.id)
+    db_session.add(training)
+
+    log_state = _make_audit_log(tenant_id, training.id, "MARK_READY", owner.id)
+    log_collab = _make_audit_log(tenant_id, training.id, "COLLABORATOR_ADDED", owner.id)
+    db_session.add(log_state)
+    db_session.add(log_collab)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.get(f"/api/v1/trainings/{training.id}/audit")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        actions = [e["action"] for e in resp.json()]
+        assert "MARK_READY" in actions, "Manager should see MARK_READY (state transition)"
+        assert "COLLABORATOR_ADDED" not in actions, "Manager must NOT see COLLABORATOR_ADDED"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_audit_non_collaborator_creator_forbidden(client, db_session):
+    """
+    BR-309a: A Training Creator who is neither owner nor collaborator of a training
+    must receive 403 when accessing the audit endpoint.
+    """
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    other_creator = _make_creator(tenant_id)
+
+    training = _make_draft_training(tenant_id, owner.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(other_creator)
+    try:
+        resp = await client.get(f"/api/v1/trainings/{training.id}/audit")
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_audit_manager_sees_all_state_transition_actions(client, db_session):
+    """
+    BR-309a: Manager sees all five state-transition action types and nothing else.
+    """
+    tenant_id = str(uuid.uuid4())
+    owner = _make_creator(tenant_id)
+    manager = make_user_auth(
+        user_id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        roles=["Business Manager"],
+    )
+
+    training = _make_draft_training(tenant_id, owner.id)
+    db_session.add(training)
+
+    state_actions = ["MARK_READY", "SEND_TO_DRAFT", "PUBLISH", "UNPUBLISH", "ARCHIVE"]
+    non_state_actions = ["COLLABORATOR_ADDED", "COLLABORATOR_REMOVED", "CREATE_TRAINING", "UPDATE_TRAINING"]
+
+    for action in state_actions + non_state_actions:
+        db_session.add(_make_audit_log(tenant_id, training.id, action, owner.id))
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.get(f"/api/v1/trainings/{training.id}/audit")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        returned_actions = set(e["action"] for e in resp.json())
+        for a in state_actions:
+            assert a in returned_actions, f"Manager should see {a}"
+        for a in non_state_actions:
+            assert a not in returned_actions, f"Manager must NOT see {a}"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_audit_training_not_found(client, db_session):
+    """
+    GET /audit on a non-existent training must return 404.
+    """
+    tenant_id = str(uuid.uuid4())
+    manager = make_user_auth(
+        user_id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        roles=["Business Manager"],
+    )
+
+    _set_user(manager)
+    try:
+        resp = await client.get(f"/api/v1/trainings/{uuid.uuid4()}/audit")
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()

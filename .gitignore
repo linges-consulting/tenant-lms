@@ -1,0 +1,55 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Node / Frontend
+app/frontend/node_modules/
+app/frontend/dist/
+app/frontend/.vite/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes (locally mounted)
+lms_videos/
+lms_images/
+lms_scorm/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude / Superpowers tooling
+.agents/
+skills-lock.json
+
+# Project-local scratch space (transient command output)
+tmp/
+
+# Playwright MCP traces (snapshots, console logs from browser smoke runs)
+.playwright-mcp/

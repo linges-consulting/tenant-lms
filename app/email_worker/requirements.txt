@@ -1,0 +1,5 @@
+redis
+httpx
+pydantic-settings
+pydantic[email]
+jinja2
