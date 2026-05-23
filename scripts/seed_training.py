@@ -533,25 +533,82 @@ def build_quiz_content(rng: random.Random, num_questions: int) -> dict:
 # DB inserts
 # ---------------------------------------------------------------------------
 
-async def resolve_creator_id(auth_engine: AsyncEngine, email: str) -> str:
+async def validate_tenant_and_creator(
+    auth_engine: AsyncEngine, *, tenant_id: str, email: str
+) -> str:
+    """Verify that:
+      1. the tenant exists and is active
+      2. the user exists (by email) and is not soft-deleted
+      3. the user has an active, training-creator membership in that tenant
+
+    Returns the user's id on success. Raises SystemExit with a clear message
+    on any failure — no insert should ever land for an invalid combination.
+    """
     async with auth_engine.connect() as conn:
-        row = (await conn.execute(
-            text("SELECT id FROM users WHERE email = :email AND deleted_at IS NULL"),
+        # 1. Tenant
+        tenant_row = (await conn.execute(
+            text("SELECT id, name, is_active FROM tenants WHERE id = :tid AND deleted_at IS NULL"),
+            {"tid": tenant_id},
+        )).first()
+        if not tenant_row:
+            available = [r[0] for r in (await conn.execute(
+                text("SELECT id FROM tenants WHERE deleted_at IS NULL ORDER BY id LIMIT 10")
+            )).all()]
+            raise SystemExit(
+                f"Error: tenant id {tenant_id!r} not found.\n"
+                f"  Available tenants: {', '.join(available) or '(none — run scripts/seed.py first)'}"
+            )
+        if not tenant_row[2]:
+            raise SystemExit(
+                f"Error: tenant {tenant_id!r} ({tenant_row[1]}) exists but is_active=false."
+            )
+
+        # 2. User
+        user_row = (await conn.execute(
+            text("SELECT id, full_name, is_sysadmin FROM users WHERE email = :email AND deleted_at IS NULL"),
             {"email": email},
         )).first()
-    if not row:
-        raise SystemExit(
-            f"Error: creator with email {email!r} not found in auth_db. "
-            f"Run scripts/seed.py --mode mock first, or pass --creator-email."
-        )
-    return row[0]
+        if not user_row:
+            raise SystemExit(
+                f"Error: user with email {email!r} not found in auth_db.\n"
+                f"  Run scripts/seed.py --mode mock first, or pass --creator-email."
+            )
+        user_id = user_row[0]
+        if user_row[2]:
+            raise SystemExit(
+                f"Error: {email!r} is a SysAdmin. SysAdmins cannot hold tenant "
+                f"memberships and so cannot own trainings. Pass a tenant-scoped "
+                f"Training Creator user via --creator-email."
+            )
 
+        # 3. Membership + creator role
+        membership = (await conn.execute(
+            text("""
+                SELECT is_training_creator, is_active, status::text
+                FROM tenant_memberships
+                WHERE user_id = :uid AND tenant_id = :tid AND deleted_at IS NULL
+            """),
+            {"uid": user_id, "tid": tenant_id},
+        )).first()
+        if not membership:
+            raise SystemExit(
+                f"Error: {email!r} has no membership in tenant {tenant_id!r}.\n"
+                f"  Either add the user to that tenant (manager UI / seed config) "
+                f"or pass a different --creator-email."
+            )
+        is_creator, mem_active, mem_status = membership
+        if not mem_active or mem_status != "ACTIVE":
+            raise SystemExit(
+                f"Error: {email!r}'s membership in {tenant_id!r} is inactive "
+                f"(is_active={mem_active}, status={mem_status!r})."
+            )
+        if not is_creator:
+            raise SystemExit(
+                f"Error: {email!r} is a member of {tenant_id!r} but does NOT have "
+                f"the Training Creator role. Only Training Creators can own a training."
+            )
 
-async def tenant_exists(core_engine: AsyncEngine, tenant_id: str) -> bool:
-    # The core service stores tenant_id as a free-form string; a row in any
-    # tenant-scoped table proves the id was used. If there are none, we still
-    # allow the insert (the first training for that tenant has to start somewhere).
-    return True
+        return user_id
 
 
 async def insert_training(
@@ -648,7 +705,9 @@ async def seed_one_training(
     core_engine = create_async_engine(core_url)
 
     try:
-        creator_id = await resolve_creator_id(auth_engine, creator_email)
+        creator_id = await validate_tenant_and_creator(
+            auth_engine, tenant_id=tenant_id, email=creator_email,
+        )
 
         topic = rng.choice(TOPICS)
         suffix = uuid.uuid4().hex[:6]
