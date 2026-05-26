@@ -92,6 +92,8 @@ export const ManagerTrainingEditor: React.FC = () => {
     const [newChapterDescription, setNewChapterDescription] = useState('');
     const [scormFile, setScormFile] = useState<File | null>(null);
     const [isUploadingScorm, setIsUploadingScorm] = useState(false);
+    const [pdfFile, setPdfFile] = useState<File | null>(null);
+    const [isUploadingPdf, setIsUploadingPdf] = useState(false);
 
     // Quiz Builder State
     const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
@@ -278,7 +280,7 @@ export const ManagerTrainingEditor: React.FC = () => {
             toast.error('Chapter title is required.');
             return;
         }
-        if (newChapterType !== 'QUIZ' && newChapterType !== 'SCORM' && !newChapterContent.trim()) {
+        if (newChapterType !== 'QUIZ' && newChapterType !== 'SCORM' && newChapterType !== 'PDF' && !newChapterContent.trim()) {
             toast.error(
                 newChapterType === 'VIDEO'
                     ? 'Video URL is required.'
@@ -292,6 +294,10 @@ export const ManagerTrainingEditor: React.FC = () => {
         }
         if (newChapterType === 'SCORM' && !scormFile && !editingChapterId) {
             toast.error('Please choose a SCORM ZIP package to upload.');
+            return;
+        }
+        if (newChapterType === 'PDF' && !pdfFile && !editingChapterId) {
+            toast.error('Please choose a PDF file to upload.');
             return;
         }
         if (newChapterType === 'QUIZ') {
@@ -338,20 +344,31 @@ export const ManagerTrainingEditor: React.FC = () => {
                 return q;
             });
 
+            let contentData: Record<string, unknown>;
+            if (newChapterType === 'QUIZ') {
+                contentData = {
+                    questions: normalizedQuestions,
+                    passing_score: passingScore,
+                    max_attempts: maxAttempts,
+                };
+            } else if (newChapterType === 'PDF') {
+                // The PDF URL is populated by uploadChapterContent below.
+                // Don't overwrite an existing url when only the description is edited.
+                contentData = { description: newChapterDescription };
+            } else if (newChapterType === 'SCORM') {
+                // SCORM content_data (index_url, base_path) is filled in by the upload endpoint.
+                contentData = {};
+            } else {
+                contentData = {
+                    [newChapterType === 'VIDEO' ? 'url' : 'text']: newChapterContent,
+                    description: newChapterDescription,
+                };
+            }
+
             const chapterData: Record<string, unknown> = {
                 title: newChapterTitle,
                 content_type: newChapterType,
-                content_data:
-                    newChapterType === 'QUIZ'
-                        ? {
-                            questions: normalizedQuestions,
-                            passing_score: passingScore,
-                            max_attempts: maxAttempts
-                        }
-                        : {
-                            [newChapterType === 'VIDEO' ? 'url' : 'text']: newChapterContent,
-                            description: newChapterDescription
-                        }
+                content_data: contentData,
             };
 
             if (!editingChapterId) {
@@ -375,11 +392,21 @@ export const ManagerTrainingEditor: React.FC = () => {
                 }
             }
 
+            if (newChapterType === 'PDF' && pdfFile) {
+                setIsUploadingPdf(true);
+                try {
+                    await managerTrainingsApi.uploadChapterContent(id, savedChapter.id, pdfFile);
+                } finally {
+                    setIsUploadingPdf(false);
+                }
+            }
+
             // Reset state
             setNewChapterTitle('');
             setNewChapterContent('');
             setNewChapterDescription('');
             setScormFile(null);
+            setPdfFile(null);
             setQuizQuestions([]);
             setMaxAttempts(0);
             setPassingScore(80);
@@ -785,6 +812,13 @@ export const ManagerTrainingEditor: React.FC = () => {
                             <HelpCircle className="w-4 h-4 mr-2" /> Quiz
                         </Button>
                         <Button
+                            variant={newChapterType === 'PDF' ? 'default' : 'outline'}
+                            className="flex-1 min-w-[120px]"
+                            onClick={() => setNewChapterType('PDF')}
+                        >
+                            <FileText className="w-4 h-4 mr-2" /> PDF
+                        </Button>
+                        <Button
                             variant={newChapterType === 'SCORM' ? 'default' : 'outline'}
                             className="flex-1 min-w-[120px]"
                             onClick={() => setNewChapterType('SCORM')}
@@ -794,7 +828,7 @@ export const ManagerTrainingEditor: React.FC = () => {
                     </div>
                 </div>
 
-                {newChapterType !== 'QUIZ' && newChapterType !== 'SCORM' && (
+                {newChapterType !== 'QUIZ' && newChapterType !== 'SCORM' && newChapterType !== 'PDF' && (
                     <div className="space-y-4">
                         <div className="space-y-2">
                             <Label className="text-secondary-foreground">{newChapterType === 'VIDEO' ? 'Video URL' : 'Content'}</Label>
@@ -838,6 +872,39 @@ export const ManagerTrainingEditor: React.FC = () => {
                                 )}
                                 <input type="file" accept=".zip" className="hidden" onChange={e => setScormFile(e.target.files?.[0] ?? null)} />
                             </label>
+                        </div>
+                    </div>
+                )}
+
+                {newChapterType === 'PDF' && (
+                    <div className="space-y-4">
+                        <div className="space-y-2">
+                            <Label className="text-secondary-foreground">PDF Document</Label>
+                            <div className={cn('flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-lg cursor-pointer transition-colors', pdfFile ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50 hover:bg-muted/30')}>
+                                <label className="flex flex-col items-center justify-center w-full h-full cursor-pointer">
+                                    <FileText className="w-8 h-8 mb-2 text-muted-foreground" />
+                                    {pdfFile ? (
+                                        <span className="text-sm font-medium text-primary">{pdfFile.name}</span>
+                                    ) : editingChapterId ? (
+                                        <span className="text-sm text-muted-foreground">Click to replace the PDF</span>
+                                    ) : (
+                                        <span className="text-sm text-muted-foreground">Click to upload a PDF</span>
+                                    )}
+                                    <input type="file" accept="application/pdf,.pdf" className="hidden" onChange={e => setPdfFile(e.target.files?.[0] ?? null)} />
+                                </label>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground">
+                                Learners view the PDF inline in their browser. Keep files under 25&nbsp;MB for the best experience.
+                            </p>
+                        </div>
+                        <div className="space-y-2">
+                            <Label className="text-secondary-foreground">Description / Instructions</Label>
+                            <textarea
+                                value={newChapterDescription}
+                                onChange={e => setNewChapterDescription(e.target.value)}
+                                placeholder="Add a description or instructions for this chapter..."
+                                className="w-full min-h-[100px] p-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+                            />
                         </div>
                     </div>
                 )}
@@ -1031,10 +1098,10 @@ export const ManagerTrainingEditor: React.FC = () => {
                     )}
                     <Button
                         onClick={() => handleSaveChapter(moduleId)}
-                        disabled={isUploadingScorm || isSavingChapter}
+                        disabled={isUploadingScorm || isUploadingPdf || isSavingChapter}
                         className="w-full sm:w-auto shadow-md"
                     >
-                        {isUploadingScorm || isSavingChapter ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving...</> : <><Save className="w-4 h-4 mr-2" /> {editingChapterId ? 'Update Chapter' : 'Save Chapter'}</>}
+                        {isUploadingScorm || isUploadingPdf || isSavingChapter ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving...</> : <><Save className="w-4 h-4 mr-2" /> {editingChapterId ? 'Update Chapter' : 'Save Chapter'}</>}
                     </Button>
                 </div>
             </CardContent>

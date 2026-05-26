@@ -427,6 +427,116 @@ async def test_qrt_01_all_quiz_types_roundtrip_through_structure(client, db_sess
 # ===========================================================================
 
 # ===========================================================================
+# TC-PDF — PDF chapter upload (2026-05-26)
+# ===========================================================================
+
+_PDF_MINIMAL_BYTES = (
+    b"%PDF-1.4\n"
+    b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+    b"2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\n"
+    b"xref\n0 3\n0000000000 65535 f\n0000000010 00000 n\n0000000056 00000 n\ntrailer<</Size 3/Root 1 0 R>>\nstartxref\n98\n%%EOF\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_pdf_01_upload_succeeds_and_sets_content_url(client, db_session):
+    """Uploading a valid PDF to a PDF chapter persists a URL and filename
+    on content_data, and returns 200. Regression for the "PDF chapter
+    type added 2026-05-26" feature.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    training = _make_draft_training(tenant_id, creator.id)
+    chapter = _make_chapter(
+        training.id, tenant_id, seq=1, title="Reference doc",
+        content_type=ContentType.PDF, content_data={"description": "Read this."},
+    )
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    training_id = training.id
+    chapter_id = chapter.id
+    fake_url = f"/storage/pdfs/{tenant_id}/{training_id}/{chapter_id}.pdf"
+    files = {"file": ("doc.pdf", io.BytesIO(_PDF_MINIMAL_BYTES), "application/pdf")}
+
+    _set_user(creator)
+    try:
+        with patch("app.utils.storage.save_pdf_file", return_value=fake_url):
+            resp = await client.post(
+                f"/api/v1/trainings/{training_id}/chapters/{chapter_id}/upload",
+                files=files,
+            )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["content_data"]["url"] == fake_url
+        assert data["content_data"]["original_filename"] == "doc.pdf"
+        # Description set at chapter creation is preserved
+        assert data["content_data"]["description"] == "Read this."
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_pdf_02_rejects_wrong_mime_type(client, db_session):
+    """A PDF chapter must reject non-PDF MIME types with a 400."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    training = _make_draft_training(tenant_id, creator.id)
+    chapter = _make_chapter(
+        training.id, tenant_id, seq=1, title="Doc",
+        content_type=ContentType.PDF, content_data={},
+    )
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    files = {"file": ("malware.exe", io.BytesIO(b"MZ\x90\x00"), "application/x-msdownload")}
+
+    _set_user(creator)
+    try:
+        resp = await client.post(
+            f"/api/v1/trainings/{training.id}/chapters/{chapter.id}/upload",
+            files=files,
+        )
+        assert resp.status_code == 400, resp.text
+        assert "PDF" in resp.json()["detail"]
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_pdf_03_video_chapter_rejects_pdf_upload(client, db_session):
+    """The upload endpoint only accepts SCORM and PDF — a VIDEO chapter
+    that someone tries to drop a PDF into should get 400 with a clear
+    message, not 200.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    training = _make_draft_training(tenant_id, creator.id)
+    chapter = _make_chapter(
+        training.id, tenant_id, seq=1, title="Vid",
+        content_type=ContentType.VIDEO, content_data={"url": "https://example.com/v.mp4"},
+    )
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    files = {"file": ("doc.pdf", io.BytesIO(_PDF_MINIMAL_BYTES), "application/pdf")}
+
+    _set_user(creator)
+    try:
+        resp = await client.post(
+            f"/api/v1/trainings/{training.id}/chapters/{chapter.id}/upload",
+            files=files,
+        )
+        assert resp.status_code == 400, resp.text
+        assert "SCORM and PDF" in resp.json()["detail"]
+    finally:
+        _clear_overrides()
+
+
+# ===========================================================================
 # TC-BNR — Auto-assigned banner preset on create (2026-05-21)
 # ===========================================================================
 

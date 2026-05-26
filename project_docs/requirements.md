@@ -129,7 +129,7 @@ Training
 |---|---|
 | **Video** | Two source types: **uploaded file** (stored on local filesystem) or **external URL** (YouTube, Dailymotion, Vimeo, etc.). Rendered via React Player for uniform playback and progress tracking across both types. Completion gated by the `onEnded` event — cannot be skipped. Tracks: resume position (learner can pick up where they left off), and watched percentage milestones (25%, 50%, 75%, 100%) for reporting. |
 | **Rich Text** | Markdown-rendered content. Marked complete when learner clicks **Mark Complete** or **Next**. |
-| **PDF / Document** | Upload a PDF file. Viewed in-browser via a PDF viewer. Marked complete when learner clicks **Mark Complete** or **Next**. Stored in `lms_images` volume under `{tenant_id}/documents/`. |
+| **PDF / Document** | Upload a PDF file. Viewed in-browser inside an iframe (no external viewer). Marked complete when learner clicks **Mark Complete** or **Next**. Stored in the `lms_images` volume at `/mnt/images/pdfs/<tenant_id>/<training_id>/<chapter_id>.pdf` and served by the gateway under `/storage/pdfs/`. Upload accepts `application/pdf` only — other MIME types are rejected with `400`. |
 | **Quiz** | Supports 5 question types: Multiple Choice (single answer), Multiple Select (multi-answer), True/False, Matching (two-column), Ordering/Sequencing. Attempts configurable per quiz, default **10**. On lockout, Business Manager must reset. |
 | **SCORM** | Supports SCORM 1.2 and SCORM 2004. Uploaded as a zip, unzipped to a dedicated local storage directory, manifest auto-parsed for entry point. Completion determined by the package's own reported status — not overridden by the LMS. Exempt from attempt limits; learners may re-launch unlimited times. _(Phase 8)_ |
 

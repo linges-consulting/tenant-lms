@@ -62,3 +62,15 @@ def save_banner_image(upload_file, tenant_id: str, training_id: str, ext: str) -
     dest = banner_dir / f"{training_id}{ext}"
     save_upload_file(upload_file, dest)
     return f"/storage/banners/{tenant_id}/{training_id}{ext}"
+
+
+def save_pdf_file(upload_file, tenant_id: str, training_id: str, chapter_id: str) -> str:
+    """Save a PDF chapter file to /mnt/images/pdfs/<tenant>/<training>/<chapter>.pdf
+    and return its public URL. The file is served by the gateway under
+    /storage/pdfs/ — see app/gateway/nginx.conf.
+    """
+    pdf_dir = Path("/mnt/images/pdfs") / tenant_id / training_id
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    dest = pdf_dir / f"{chapter_id}.pdf"
+    save_upload_file(upload_file, dest)
+    return f"/storage/pdfs/{tenant_id}/{training_id}/{chapter_id}.pdf"
