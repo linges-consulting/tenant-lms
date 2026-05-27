@@ -63,8 +63,14 @@ SysAdmins land on a global management dashboard using a neutral, non-tenant-spec
 
 ## 3. Training Content & Ownership
 
-**BR-301 — Owner-Only Control**
-Only the original creator (owner) can publish, unpublish, archive, or deactivate a training. Assignment of trainings to users and groups is a Business Manager responsibility, not a Training Creator responsibility.
+**BR-301 — Training Lifecycle Role Responsibilities**
+The training lifecycle follows a "baton" model with two distinct roles:
+
+- **Training Creator (owner only):** mark-ready (Draft → Ready) and send-to-draft (Ready → Draft only). The creator cannot send a *published* training to draft directly.
+- **Business Manager:** publish (Ready → Published), unpublish (Published → Ready, resets learner progress), and archive. Managers cannot set a training to Draft.
+- **Dual-role users** (both Training Creator and Business Manager) inherit both sets of permissions, but the state machine is always enforced — no state can be skipped. Example: a dual-role owner cannot go Published → Draft without unpublishing first.
+- Collaborators have none of these lifecycle permissions (BR-302).
+- Assignment of published trainings to users/groups is a Business Manager responsibility.
 
 **BR-301a — Training Assignment**
 Business Managers assign published trainings from the tenant's training library to individual users, groups, or a combination of both. Training Creators have no assignment permissions.

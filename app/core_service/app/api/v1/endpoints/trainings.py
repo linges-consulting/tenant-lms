@@ -1105,10 +1105,9 @@ async def send_training_to_draft(
     tenant_id: str = Depends(deps.get_current_tenant_id),
 ):
     """
-    Transition a training from Ready back to Draft state (BR-301a).
-    Allowed: Training Creator (owner only) OR Business Manager.
+    Transition a training from Ready → Draft. Owner only.
+    Published trainings must be unpublished by a Manager first (published → ready).
     """
-    # 1. Load training (tenant-isolated)
     stmt = (
         select(Training)
         .where(Training.id == training_id, Training.tenant_id == tenant_id, Training.deleted_at == None)
@@ -1120,66 +1119,32 @@ async def send_training_to_draft(
     if not training:
         raise HTTPException(status_code=404, detail="Training not found")
 
-    # 2. Role authorization: Business Manager OR owner Training Creator
-    is_manager = any(role in ["Business Manager", "Admin", "SysAdmin"] for role in current_user.roles)
-    is_owner = training.created_by_id == current_user.id
-    if not is_manager and not is_owner:
-        raise HTTPException(status_code=403, detail="Only the training owner or a Manager can send to draft")
+    # Owner only — managers use /unpublish to go published → ready
+    if training.created_by_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the training owner can send it to draft")
 
-    # 3. State guard
     if training.is_archived:
         raise HTTPException(status_code=400, detail="Archived trainings cannot be sent to draft")
 
-    if not training.is_ready and not training.is_published:
-        raise HTTPException(status_code=400, detail="Training must be in Ready or Published state to send to draft")
-
-    # 4. Branch on current state
     if training.is_published:
-        # Published → Draft: Manager only
-        if not is_manager:
-            raise HTTPException(status_code=403, detail="Only a Manager can unpublish a training")
-
-        # Reset all learner progress for this training
-        # Delete UserProgress rows for all chapters in this training
-        await db.execute(
-            delete(UserProgress).where(UserProgress.training_id == training_id)
+        raise HTTPException(
+            status_code=400,
+            detail="Training is published. Ask a manager to unpublish it first (published → ready), then you can send it to draft."
         )
-        # Reset enrollment completion status (keep enrollment records, just un-complete them)
-        enrollments_result = await db.execute(
-            select(Enrollment).where(
-                Enrollment.training_id == training_id,
-                Enrollment.tenant_id == tenant_id,
-            )
-        )
-        enrollments = enrollments_result.scalars().all()
-        for enrollment in enrollments:
-            enrollment.is_completed = False
-            enrollment.completed_at = None
-            enrollment.training_version_id = None
 
-        training.is_published = False
-        training.is_ready = False
+    if not training.is_ready:
+        raise HTTPException(status_code=400, detail="Training is already in draft state")
 
-        # Audit log: UNPUBLISH
-        await log_audit(
-            db, tenant_id, current_user.id,
-            "UNPUBLISH", "training", training_id,
-            {"title": training.title}
-        )
-    else:
-        # Ready → Draft: Creator (owner) OR Manager
-        training.is_ready = False
+    training.is_ready = False
 
-        # Audit log: SEND_TO_DRAFT
-        await log_audit(
-            db, tenant_id, current_user.id,
-            "SEND_TO_DRAFT", "training", training_id,
-            {"title": training.title}
-        )
+    await log_audit(
+        db, tenant_id, current_user.id,
+        "SEND_TO_DRAFT", "training", training_id,
+        {"title": training.title}
+    )
 
     await db.commit()
 
-    # Re-fetch with eager-loaded collaborators to avoid MissingGreenlet on serialization
     refreshed_result = await db.execute(
         select(Training)
         .where(Training.id == training_id, Training.tenant_id == tenant_id)
@@ -2890,39 +2855,64 @@ async def export_training_scorm(
 async def unpublish_training(
     training_id: str,
     db: AsyncSession = Depends(deps.get_db),
-    current_user: deps.UserAuth = Depends(deps.get_training_creator),
+    current_user: deps.UserAuth = Depends(deps.get_business_manager),
     tenant_id: str = Depends(deps.get_current_tenant_id),
 ):
     """
-    Unpublish a training to make it editable again.
-    Only the initial creator can unpublish.
+    Unpublish a training: published → ready. Manager only.
+    Resets all learner progress. Creator can then send it to draft if needed.
     """
     stmt = select(Training).where(Training.id == training_id, Training.tenant_id == tenant_id).options(selectinload(Training.collaborators))
     result = await db.execute(stmt)
     training = result.scalar_one_or_none()
-    
+
     if not training:
         raise HTTPException(status_code=404, detail="Training not found")
-        
-    if training.created_by_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Only the initial creator can unpublish the training")
+
+    if not training.is_published:
+        raise HTTPException(status_code=400, detail="Training is not published")
+
+    if training.is_archived:
+        raise HTTPException(status_code=400, detail="Archived trainings cannot be unpublished")
+
+    # Reset all learner progress
+    await db.execute(delete(UserProgress).where(UserProgress.training_id == training_id))
+    enrollments_result = await db.execute(
+        select(Enrollment).where(
+            Enrollment.training_id == training_id,
+            Enrollment.tenant_id == tenant_id,
+        )
+    )
+    for enrollment in enrollments_result.scalars().all():
+        enrollment.is_completed = False
+        enrollment.completed_at = None
+        enrollment.training_version_id = None
 
     training.is_published = False
-    # When unpublishing, we keep it active if it was already, but usually it means taking it off market
-    # Actually, the user wants "unpublished then edit option is enabled". 
-    # Let's keep is_active as True so managers can still PREVIEW it, but it won't be in the learner "Published" list.
-    # Wait, the learner list filters by is_published or is_active?
-    # Trainings endpoint /trainings/ filters by is_published=True (usually).
-    
+    training.is_ready = True
+
+    await log_audit(
+        db, tenant_id, current_user.id,
+        "UNPUBLISH", "training", training_id,
+        {"title": training.title}
+    )
+
     await db.commit()
-    await db.refresh(training)
-    
-    # Invalidate caches
+
+    refreshed_result = await db.execute(
+        select(Training)
+        .where(Training.id == training_id, Training.tenant_id == tenant_id)
+        .options(selectinload(Training.collaborators))
+    )
+    updated = refreshed_result.scalar_one_or_none()
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to retrieve updated training")
+
     await invalidate_cache("training_detail", tenant_id)
     await invalidate_cache("training_structure", tenant_id)
     await invalidate_cache("assigned_trainings", tenant_id)
-    
-    return training
+
+    return updated
 
 @router.get("/internal/metrics", response_model=GlobalMetrics)
 async def get_internal_metrics(
