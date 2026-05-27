@@ -6,12 +6,12 @@ import { Input } from './ui/input';
 import { Pencil, Check, X, Edit2, Mail, Calendar, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { UserAvatar } from './UserAvatar';
 import { AvatarSelectionModal } from './AvatarSelectionModal';
-import { userService } from '../api/users';
+import { userService, type User } from '../api/users';
 import { settingsService } from '../api/settings';
 import { getApiError } from '../lib/utils';
 
 interface ProfileCardProps {
-    user: Record<string, unknown>;
+    user: User;
     activeTenantId?: string | null;
     isViewOnly?: boolean;
     onRefresh?: () => Promise<void>;

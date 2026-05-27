@@ -131,7 +131,7 @@ export const AuthSignup: React.FC = () => {
                     if (Array.isArray(detail)) {
                         setError(detail.map((d: { msg: string }) => d.msg).join(', '));
                     } else {
-                        setError(detail.toString());
+                        setError(String(detail));
                     }
                 } else {
                     setError(err.message || 'Registration failed. Please try again.');

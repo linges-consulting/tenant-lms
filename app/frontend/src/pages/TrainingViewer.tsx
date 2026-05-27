@@ -1068,7 +1068,7 @@ export const TrainingViewer: React.FC = () => {
                                             </div>
                                         )}
 
-                                        {activeChapter.content_type === 'SCORM' && activeChapter.content_data?.index_url && (
+                                        {activeChapter.content_type === 'SCORM' && !!activeChapter.content_data?.index_url && (
                                             <div className="w-full rounded-2xl overflow-hidden border border-border/50 shadow-xl">
                                                 <iframe
                                                     src={activeChapter.content_data.index_url as string}
@@ -1138,7 +1138,7 @@ export const TrainingViewer: React.FC = () => {
                                         </div>
 
                                         <div className="py-6 space-y-6">
-                                            {activeChapter.content_data?.description && (
+                                            {!!activeChapter.content_data?.description && (
                                                 <div className="p-5 bg-muted/20 border border-border/50 rounded-2xl">
                                                     <h3 className="text-sm font-bold text-foreground mb-2 uppercase tracking-tight">Lesson Overview</h3>
                                                     <p className="text-muted-foreground text-sm leading-relaxed whitespace-pre-wrap">{activeChapter.content_data.description as React.ReactNode}</p>
