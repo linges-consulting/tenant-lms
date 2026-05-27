@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useTheme } from '../components/theme-provider';
 import { userService } from '../api/users';
 import { authService } from '../api/auth';
-import type { User } from '../api/users';
+import type { User, TenantMembership } from '../api/users';
 import type { Tenant } from '../api/auth';
 import { authStorage } from '../lib/auth-storage';
 
@@ -40,7 +40,7 @@ const hexToHSL = (hex: string): { h: number, s: number, l: number, formatted: st
 interface AuthContextType {
     user: User | null;
     activeTenant: Tenant | null;
-    activeMembership: Record<string, unknown> | null;
+    activeMembership: TenantMembership | null;
     isLoading: boolean;
     isRefreshing?: boolean;
     login: (token: string) => Promise<void>;

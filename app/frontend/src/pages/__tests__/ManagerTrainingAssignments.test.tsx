@@ -262,7 +262,6 @@ describe('ManagerTrainingAssignments — Active Assignments tab', () => {
         // The existing vi.mock for '../../api/trainings' defines deleteAssignment
         // as vi.fn(), but we need a fresh spy for this single test.
         const trainingsModule = await import('../../api/trainings');
-        // @ts-expect-error: this is the mocked module from vi.mock()
         trainingsModule.managerTrainingsApi.deleteAssignment = deleteAssignment;
 
         renderAssignments();

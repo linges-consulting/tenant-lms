@@ -126,8 +126,8 @@ export const AuthSignup: React.FC = () => {
             navigate('/');
         } catch (err) {
             if (err instanceof ApiError) {
-                if (err.status === 422 && err.data?.detail) {
-                    const detail = err.data.detail;
+                if (err.status === 422 && (err.data as Record<string, unknown>)?.detail) {
+                    const detail = (err.data as Record<string, unknown>).detail;
                     if (Array.isArray(detail)) {
                         setError(detail.map((d: { msg: string }) => d.msg).join(', '));
                     } else {

@@ -111,19 +111,23 @@ export const UnifiedDashboard: React.FC = () => {
                 </div>
             ) : (
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                    {LEARNER_STAT_CARDS.map(({ key, label, icon: Icon, alert }) => (
-                        <Card key={key} className="border-border/50 shadow-sm">
-                            <CardContent className="p-6">
-                                <p className="text-sm font-medium text-muted-foreground mb-1">{label}</p>
-                                <div className="flex items-baseline gap-2">
-                                    <p className={cn('text-3xl font-bold', alert && (learnerData?.[key] ?? 0) > 0 ? 'text-destructive' : '')}>
-                                        {learnerData?.[key] ?? 0}
-                                    </p>
-                                    <Icon className={cn('w-4 h-4', alert && (learnerData?.[key] ?? 0) > 0 ? 'text-destructive' : 'text-muted-foreground')} />
-                                </div>
-                            </CardContent>
-                        </Card>
-                    ))}
+                    {LEARNER_STAT_CARDS.map((card) => {
+                        const { key, label, icon: Icon } = card;
+                        const alert = 'alert' in card ? card.alert : undefined;
+                        return (
+                            <Card key={key} className="border-border/50 shadow-sm">
+                                <CardContent className="p-6">
+                                    <p className="text-sm font-medium text-muted-foreground mb-1">{label}</p>
+                                    <div className="flex items-baseline gap-2">
+                                        <p className={cn('text-3xl font-bold', alert && (learnerData?.[key] ?? 0) > 0 ? 'text-destructive' : '')}>
+                                            {learnerData?.[key] ?? 0}
+                                        </p>
+                                        <Icon className={cn('w-4 h-4', alert && (learnerData?.[key] ?? 0) > 0 ? 'text-destructive' : 'text-muted-foreground')} />
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        );
+                    })}
                 </div>
             )}
             </div>

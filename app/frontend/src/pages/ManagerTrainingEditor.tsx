@@ -379,9 +379,9 @@ export const ManagerTrainingEditor: React.FC = () => {
 
             let savedChapter;
             if (editingChapterId) {
-                savedChapter = await managerTrainingsApi.updateChapter(id, editingChapterId, chapterData);
+                savedChapter = await managerTrainingsApi.updateChapter(id, editingChapterId, chapterData as Partial<{ title: string; content_type: string; content_data: Record<string, unknown> }>);
             } else {
-                savedChapter = await managerTrainingsApi.createChapter(id, chapterData);
+                savedChapter = await managerTrainingsApi.createChapter(id, chapterData as { title: string; content_type: string; content_data: Record<string, unknown>; sequence_order: number; module_id?: string });
             }
 
             if (newChapterType === 'SCORM' && scormFile) {
@@ -537,12 +537,12 @@ export const ManagerTrainingEditor: React.FC = () => {
                 };
             });
             setQuizQuestions(normalized);
-            setPassingScore(chapter.content_data?.passing_score || 80);
-            setMaxAttempts(chapter.content_data?.max_attempts || 0);
+            setPassingScore((chapter.content_data?.passing_score as number) || 80);
+            setMaxAttempts((chapter.content_data?.max_attempts as number) || 0);
         } else {
-            const text = chapter.content_data?.text || chapter.content_data?.url || '';
+            const text = ((chapter.content_data?.text as string) || (chapter.content_data?.url as string) || '');
             setNewChapterContent(text);
-            setNewChapterDescription(chapter.content_data?.description || '');
+            setNewChapterDescription((chapter.content_data?.description as string) || '');
         }
         
         setActiveInlineForm(null); // Close any open "Add" forms
