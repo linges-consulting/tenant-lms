@@ -9,6 +9,7 @@ interface UserDropdownUser {
   full_name?: string | null;
   email?: string;
   avatar_url?: string | null;
+  username?: string | null;
 }
 
 interface UserDropdownProps {

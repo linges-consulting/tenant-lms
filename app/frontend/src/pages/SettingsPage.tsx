@@ -127,7 +127,7 @@ export const SettingsPage: React.FC = () => {
                         {/* Left Column: Avatar & Overview */}
                         <div className="md:col-span-1 space-y-6">
                             <ProfileCard
-                                user={user}
+                                user={user! as unknown as Record<string, unknown>}
                                 activeTenantId={activeTenant?.id}
                                 onRefresh={refreshUser}
                             />

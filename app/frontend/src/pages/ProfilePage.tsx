@@ -4,6 +4,7 @@ import {
     User as UserIcon,
     Award,
     BookOpen,
+    ChevronLeft,
     Clock,
     Trophy,
     CheckCircle2,
@@ -191,7 +192,7 @@ export const ProfilePage: React.FC = () => {
                 {/* Left Column: Profile Card & Stats Overview */}
                 <div className="space-y-6">
                     <ProfileCard
-                        user={user}
+                        user={user as unknown as Record<string, unknown>}
                         isViewOnly={true}
                         activeTenantId={selectedTenantId === 'global' ? user.members?.[0]?.tenant_id : selectedTenantId}
                     />

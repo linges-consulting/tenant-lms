@@ -66,7 +66,7 @@ function getRoleLabels(user: User | undefined, activeTenantId: string | undefine
     // Defensive fallback: if activeTenantId is missing or match fails,
     // try to find ANY membership that has a specialized role (Manager/Creator)
     if (!membership && (!activeTenantId || activeTenantId === '')) {
-        membership = user.members.find((m) => m.is_business_manager || m.is_training_creator || m.isBusinessManager || m.isTrainingCreator);
+        membership = user.members.find((m) => m.is_business_manager || m.is_training_creator);
     }
 
     const m = membership || user.members[0];
@@ -75,9 +75,9 @@ function getRoleLabels(user: User | undefined, activeTenantId: string | undefine
     const roles: string[] = [];
     
     // Aggressive check: snake_case, camelCase, and role string from computed field
-    const isManager = m.is_business_manager || m.isBusinessManager || m.role === 'Business Manager' || m.role === 'Manager';
-    const isCreator = m.is_training_creator || m.isTrainingCreator || m.role === 'Training Creator' || m.role === 'Creator';
-    const isEmployee = m.is_employee || m.isEmployee || m.role === 'Employee';
+    const isManager = m.is_business_manager || m.role === 'Business Manager' || m.role === 'Manager';
+    const isCreator = m.is_training_creator || m.role === 'Training Creator' || m.role === 'Creator';
+    const isEmployee = m.is_employee || m.role === 'Employee';
 
     if (isManager) roles.push('Manager');
     if (isCreator) roles.push('Creator');
@@ -320,7 +320,7 @@ const ViewProfileModal: React.FC<ViewProfileModalProps> = ({ user, mode, onClose
                                     <Badge className="bg-primary/10 text-primary border-primary/20">SYSADMIN</Badge>
                                 )}
                                 {user.members?.map(m => {
-                                    const roles = getRoleLabels(m as User, m.tenant_id);
+                                    const roles = getRoleLabels(m as unknown as User, m.tenant_id);
                                     return (
                                         <div key={m.tenant_id} className="flex justify-between items-center bg-muted/30 p-2 rounded border border-border">
                                             <span className="text-sm truncate w-1/2">{m.tenant?.name || m.tenant_id}</span>

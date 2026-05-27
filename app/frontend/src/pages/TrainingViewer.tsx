@@ -242,14 +242,14 @@ export const TrainingViewer: React.FC = () => {
             } else if (!isCompleted) {
                 let updatedActive = null;
                 for (const mod of sData.modules) {
-                    const match = mod.chapters.find(c => c.id === activeChapter.id);
+                    const match = mod.chapters.find(c => c.id === activeChapter?.id);
                     if (match) {
                         updatedActive = match;
                         break;
                     }
                 }
                 if (!updatedActive) {
-                    updatedActive = sData.orphan_chapters.find(c => c.id === activeChapter.id);
+                    updatedActive = sData.orphan_chapters.find(c => c.id === activeChapter?.id);
                 }
                 if (updatedActive) {
                     setActiveChapter(updatedActive);
@@ -589,7 +589,7 @@ export const TrainingViewer: React.FC = () => {
         if (!activeChapter || activeChapter.content_type !== 'QUIZ') return null;
 
         const content = activeChapter.content_data;
-        const questions = content?.questions || [];
+        const questions = (content?.questions || []) as Question[];
         const isCompleted = activeChapter.is_completed || !!quizResult;
         
         if (quizResult && !isReviewMode) {
@@ -674,7 +674,7 @@ export const TrainingViewer: React.FC = () => {
 
         const qIndex = currentQuestionIndex ?? 0;
         const currentQ = questions[qIndex];
-        const maxAttempts = content?.max_attempts || 0;
+        const maxAttempts = (content?.max_attempts as number) || 0;
         const attemptsCount = activeChapter.attempts_count || 0;
         const isUnlimited = maxAttempts === 0;
         const isLocked = !isCompleted && !isUnlimited && attemptsCount >= maxAttempts;
@@ -1043,7 +1043,7 @@ export const TrainingViewer: React.FC = () => {
                                             <div className="aspect-video w-full rounded-2xl overflow-hidden bg-black shadow-xl border border-border/50">
                                                 <ReactPlayer
                                                     ref={playerRef}
-                                                    src={activeChapter.content_data?.url ?? activeChapter.video_url ?? ''}
+                                                    src={(activeChapter.content_data?.url as string) ?? activeChapter.video_url ?? ''}
                                                     width="100%"
                                                     height="100%"
                                                     controls
@@ -1060,7 +1060,7 @@ export const TrainingViewer: React.FC = () => {
                                         {activeChapter.content_type === 'PDF' && (activeChapter.content_data?.url || activeChapter.video_url) && (
                                             <div className="w-full h-[70vh] rounded-lg overflow-hidden border border-border/50">
                                                 <iframe
-                                                    src={activeChapter.content_data?.url ?? activeChapter.video_url ?? ''}
+                                                    src={(activeChapter.content_data?.url as string) ?? activeChapter.video_url ?? ''}
                                                     title={activeChapter.title}
                                                     className="w-full h-full"
                                                     aria-label={`PDF: ${activeChapter.title}`}
@@ -1071,7 +1071,7 @@ export const TrainingViewer: React.FC = () => {
                                         {activeChapter.content_type === 'SCORM' && activeChapter.content_data?.index_url && (
                                             <div className="w-full rounded-2xl overflow-hidden border border-border/50 shadow-xl">
                                                 <iframe
-                                                    src={activeChapter.content_data.index_url}
+                                                    src={activeChapter.content_data.index_url as string}
                                                     title={activeChapter.title}
                                                     className="w-full"
                                                     style={{ height: '70vh', border: 'none' }}
@@ -1141,13 +1141,13 @@ export const TrainingViewer: React.FC = () => {
                                             {activeChapter.content_data?.description && (
                                                 <div className="p-5 bg-muted/20 border border-border/50 rounded-2xl">
                                                     <h3 className="text-sm font-bold text-foreground mb-2 uppercase tracking-tight">Lesson Overview</h3>
-                                                    <p className="text-muted-foreground text-sm leading-relaxed whitespace-pre-wrap">{activeChapter.content_data.description}</p>
+                                                    <p className="text-muted-foreground text-sm leading-relaxed whitespace-pre-wrap">{activeChapter.content_data.description as React.ReactNode}</p>
                                                 </div>
                                             )}
 
                                             <div className="prose max-w-none text-foreground font-medium leading-relaxed">
                                                 <div dangerouslySetInnerHTML={{ 
-                                                    __html: (activeChapter.content_data?.text || activeChapter.content || (activeChapter.content_type === 'VIDEO' ? '' : 'No content provided for this lesson.'))?.replace(/\n/g, '<br/>') 
+                                                    __html: ((activeChapter.content_data?.text as string) || activeChapter.content || (activeChapter.content_type === 'VIDEO' ? '' : 'No content provided for this lesson.'))?.replace(/\n/g, '<br/>') 
                                                 }} />
                                             </div>
                                         </div>

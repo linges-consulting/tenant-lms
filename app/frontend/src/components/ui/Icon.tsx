@@ -9,7 +9,7 @@ interface IconProps extends LucideProps {
 }
 
 export const Icon: React.FC<IconProps> = ({ name, ...props }) => {
-  const LucideIcon = (LucideIcons as Record<string, React.ComponentType<LucideProps>>)[name];
+  const LucideIcon = (LucideIcons as unknown as Record<string, React.ComponentType<LucideProps>>)[name];
 
   if (!LucideIcon) {
     return <LucideIcons.HelpCircle {...props} />;
