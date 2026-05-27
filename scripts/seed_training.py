@@ -632,7 +632,7 @@ async def insert_training(
         ) VALUES (
             :id, :tid, :title, :desc, :cat, :dur,
             :thumb, 1, FALSE, FALSE, FALSE, TRUE,
-            FALSE, 'modular', '{}', FALSE,
+            FALSE, 'modular', '[]', FALSE,
             :cby, :now, :now
         )
     """), {

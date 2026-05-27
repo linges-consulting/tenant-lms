@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/auth-context';
 interface AuthGuardProps {
     children: React.ReactNode;
     requireSysAdmin?: boolean;
+    requireNotSysAdmin?: boolean;
     requireTrainingCreator?: boolean;
     requireBusinessManager?: boolean;
 }
@@ -12,6 +13,7 @@ interface AuthGuardProps {
 export const AuthGuard: React.FC<AuthGuardProps> = ({
     children,
     requireSysAdmin = false,
+    requireNotSysAdmin = false,
     requireTrainingCreator = false,
     requireBusinessManager = false,
 }) => {
@@ -32,7 +34,6 @@ export const AuthGuard: React.FC<AuthGuardProps> = ({
     }
 
     if (!user) {
-        // Redirect to login but save the current location they were trying to go to
         return <Navigate to="/" state={{ from: location }} replace />;
     }
 
@@ -40,8 +41,13 @@ export const AuthGuard: React.FC<AuthGuardProps> = ({
         return <Navigate to="/dashboard" replace />;
     }
 
+    // SysAdmins are global-only — they have no tenant membership and cannot use
+    // the learner or manager portals. Redirect them to their admin portal.
+    if (requireNotSysAdmin && user.is_sysadmin) {
+        return <Navigate to="/admin" replace />;
+    }
+
     if (requireTrainingCreator && !activeMembership?.is_training_creator) {
-        // User lacks training creator role — redirect to manager dashboard
         return <Navigate to="/manage" replace />;
     }
 

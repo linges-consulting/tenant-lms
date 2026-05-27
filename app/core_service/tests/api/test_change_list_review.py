@@ -427,6 +427,51 @@ async def test_qrt_01_all_quiz_types_roundtrip_through_structure(client, db_sess
 # ===========================================================================
 
 # ===========================================================================
+# TC-TAG — Defensive coercion of mis-stored tags column (2026-05-26)
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_tag_01_manager_list_handles_dict_tags_without_500(client, db_session):
+    """A training row whose `tags` JSON is `{}` (dict) instead of `[]` (array)
+    must not 500 the /trainings/manager endpoint. The schema's tags coercer
+    treats a dict as no tags so serialization continues.
+
+    Regression: 2026-05-26 a seed script wrote `'{}'` into the tags JSON
+    column for several trainings; the manager listing then crashed with
+    `Input should be a valid list [type=list_type]` from Pydantic.
+    """
+    tenant_id = str(uuid.uuid4())
+    manager = make_user_auth(
+        user_id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        roles=["Business Manager"],
+    )
+
+    # Insert two trainings — one with a normal [] tags value, one with the
+    # historical {} dict shape.
+    ok_training = _make_draft_training(tenant_id, manager.id, title="Healthy tags")
+    bad_training = _make_draft_training(tenant_id, manager.id, title="Mis-seeded tags")
+    bad_training.tags = {}  # the exact mis-stored shape
+    db_session.add(ok_training)
+    db_session.add(bad_training)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.get("/api/v1/trainings/manager")
+        assert resp.status_code == 200, (
+            f"Expected 200 even with dict-tagged row, got {resp.status_code}: {resp.text}"
+        )
+        titles = {t["title"] for t in resp.json()}
+        assert {"Healthy tags", "Mis-seeded tags"}.issubset(titles)
+        # The mis-tagged row surfaces with tags coerced to []
+        mis_seeded = next(t for t in resp.json() if t["title"] == "Mis-seeded tags")
+        assert mis_seeded["tags"] == []
+    finally:
+        _clear_overrides()
+
+
+# ===========================================================================
 # TC-PDF — PDF chapter upload (2026-05-26)
 # ===========================================================================
 

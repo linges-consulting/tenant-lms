@@ -1,7 +1,7 @@
-name: Deploy to Production
+name: CI — Tests and Lint
 
 on:
-  push:
+  pull_request:
     branches: [main]
 
 jobs:
@@ -124,35 +124,3 @@ jobs:
       - name: Lint
         working-directory: app/frontend
         run: npm run lint
-
-  deploy:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    needs: [test-auth, test-core, test-notification, lint-frontend]
-    steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.PROD_SSH_HOST }}
-          username: ${{ secrets.PROD_SSH_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          script: |
-            set -e
-            cd /opt/lms
-
-            # Pull the merged commit
-            git pull origin main
-
-            # Run migrations before restarting (safe -- Alembic only applies unapplied)
-            docker compose -f docker-compose.prod.yml run --rm auth-service alembic upgrade head
-            docker compose -f docker-compose.prod.yml run --rm core-service alembic upgrade head
-            docker compose -f docker-compose.prod.yml run --rm notification-service alembic upgrade head
-
-            # Rebuild images from updated source and restart
-            docker compose -f docker-compose.prod.yml up --build -d
-
-            # Idempotent production seed -- no-op if already seeded
-            docker compose -f docker-compose.prod.yml run --rm auth-service python seed_data.py --production
-
-            # Remove stale image layers
-            docker image prune -f
