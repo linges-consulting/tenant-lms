@@ -24,7 +24,7 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
     onRefresh
 }) => {
     // Editing state
-    const [username, setUsername] = useState(user?.username || '');
+    const [username, setUsername] = useState((user?.username as string) || '');
     const [isEditingUsername, setIsEditingUsername] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [successMessage, setSuccessMessage] = useState('');
@@ -101,7 +101,7 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
     };
 
     const roles = getActiveRoles();
-    const initials = (user?.full_name || user?.username || 'U')
+    const initials = ((user?.full_name as string) || (user?.username as string) || 'U')
         .split(' ')
         .map((n: string) => n[0])
         .join('')
@@ -115,7 +115,7 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
                         <div className="h-32 w-32 border-4 border-background rounded-xl shadow-xl overflow-hidden bg-muted/30">
                             <UserAvatar
                                 initials={initials}
-                                shapeId={user?.avatar_url || null}
+                                shapeId={(user?.avatar_url as string | null) || null}
                                 className="w-full h-full"
                                 variant="rounded-square"
                             />
@@ -242,7 +242,7 @@ export const ProfileCard: React.FC<ProfileCardProps> = ({
                 <AvatarSelectionModal
                     open={avatarModalOpen}
                     onOpenChange={setAvatarModalOpen}
-                    selectedAvatarId={user?.avatar_url || null}
+                    selectedAvatarId={(user?.avatar_url as string | null) || null}
                     onSelectAvatar={handleAvatarShapeSelect}
                     onRemoveAvatar={() => handleAvatarShapeSelect(null)}
                     isLoading={isUploadingAvatar}
