@@ -109,7 +109,7 @@ merge dev → main  (push to main)
         ├── Frontend Lint         ─┘
         │
         └── deploy  ← only runs if all tests pass
-              ├── SSH into /opt/lms
+              ├── SSH into ~/app/tenant-lms
               ├── git pull origin main
               ├── alembic upgrade head (per service, before restart)
               ├── docker compose up --build -d
@@ -119,7 +119,7 @@ merge dev → main  (push to main)
 ### What lives where
 
 - **GitHub Secrets** — SSH credentials only (see §2 above)
-- **`/opt/lms/.env`** on the server — all runtime secrets (DB passwords, JWT secrets, Mailgun keys, etc.) — never committed to the repository
+- **`~/app/tenant-lms/.env`** on the server — all runtime secrets (DB passwords, JWT secrets, Mailgun keys, etc.) — never committed to the repository
 
 ---
 
@@ -197,8 +197,8 @@ Run this once on the VPS before the first automated deploy. Subsequent deploys a
 ```bash
 # 1. SSH into server and clone the repo
 ssh user@your-server
-git clone https://github.com/<owner>/CustomLMS4.git /opt/lms
-cd /opt/lms
+git clone https://github.com/<owner>/CustomLMS4.git ~/app/tenant-lms
+cd ~/app/tenant-lms
 
 # 2. Create .env from the template and fill in all production values
 cp .env.example .env
@@ -229,7 +229,7 @@ To roll back to a previous commit, check out that commit on the server and rebui
 
 ```bash
 ssh user@your-server
-cd /opt/lms
+cd ~/app/tenant-lms
 git checkout <previous-sha>
 docker compose --env-file .env -f docker-compose.prod.yml up --build -d
 ```
