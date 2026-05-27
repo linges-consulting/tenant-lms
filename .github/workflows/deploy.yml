@@ -138,7 +138,7 @@ jobs:
           key: ${{ secrets.PROD_SSH_KEY }}
           script: |
             set -e
-            cd /opt/lms
+            cd ~/app/tenant-lms
 
             # Pull the merged commit
             git pull origin main

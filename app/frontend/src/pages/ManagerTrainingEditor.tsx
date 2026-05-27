@@ -7,6 +7,7 @@ import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../components/ui/dialog';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
 import { ArrowLeft, PlusCircle, Save, Globe, RotateCcw, Video, FileText, Loader2, History, X, HelpCircle, Trash2, Check, AlertCircle, Upload, ChevronUp, ChevronDown, Eye } from 'lucide-react';
 import { PageLoader } from '../components/ui/PageLoader';
 
@@ -1182,11 +1183,26 @@ export const ManagerTrainingEditor: React.FC = () => {
                                 </Button>
                             )}
                             {isCreator && !isCollaborator && (
-                                training.is_ready && !training.is_published ? (
+                                training.is_published ? (
+                                    // Published — creator cannot act until a manager unpublishes first
+                                    <TooltipProvider>
+                                        <Tooltip>
+                                            <TooltipTrigger asChild>
+                                                <span>
+                                                    <Button size="sm" variant="outline" disabled
+                                                        className="text-muted-foreground border-border opacity-50 cursor-not-allowed pointer-events-none">
+                                                        <RotateCcw className="w-3.5 h-3.5 mr-1.5" />Revert to Draft
+                                                    </Button>
+                                                </span>
+                                            </TooltipTrigger>
+                                            <TooltipContent>Ask a manager to unpublish this training first, then you can send it to draft.</TooltipContent>
+                                        </Tooltip>
+                                    </TooltipProvider>
+                                ) : training.is_ready ? (
                                     <Button size="sm" onClick={handleSendToDraft} variant="outline" className="text-muted-foreground border-border">
                                         <RotateCcw className="w-3.5 h-3.5 mr-1.5" />Revert to Draft
                                     </Button>
-                                ) : !training.is_published && !training.is_archived && (
+                                ) : !training.is_archived && (
                                     <Button size="sm" onClick={handleMarkReady} variant="default" className="bg-emerald-600 hover:bg-emerald-700 text-white border-0">
                                         <Globe className="w-3.5 h-3.5 mr-1.5" />Mark Ready
                                     </Button>
