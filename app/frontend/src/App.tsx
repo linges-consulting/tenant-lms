@@ -64,7 +64,7 @@ function App() {
         </Route>
 
         {/* Learner Portal Routes - Require Auth */}
-        <Route path="/dashboard" element={<AuthGuard><AppLayout /></AuthGuard>}>
+        <Route path="/dashboard" element={<AuthGuard requireNotSysAdmin><AppLayout /></AuthGuard>}>
           <Route index element={<UnifiedDashboard />} />
           <Route path="my-courses" element={<Navigate to="/dashboard" replace />} />
           <Route path="certificates" element={<LearnerCertificates />} />
@@ -73,7 +73,7 @@ function App() {
         </Route>
 
         {/* Manager Portal Routes - Require Auth */}
-        <Route path="/manage" element={<AuthGuard><AppLayout /></AuthGuard>}>
+        <Route path="/manage" element={<AuthGuard requireNotSysAdmin><AppLayout /></AuthGuard>}>
           <Route index element={<UnifiedDashboard />} />
           <Route path="employees" element={<ManagerEmployees />} />
           <Route path="groups" element={<ManagerGroups />} />

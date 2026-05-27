@@ -1922,7 +1922,12 @@ async def upload_chapter_content(
     tenant_id: str = Depends(deps.get_current_tenant_id),
 ):
     """
-    Upload and process content for a chapter (e.g., SCORM ZIP). Requires Training Creator role.
+    Upload and process content for a chapter. Currently supports:
+      - SCORM chapters: a .zip is extracted into the SCORM volume
+      - PDF chapters:   a .pdf is stored under the images volume
+
+    Requires Training Creator role and the training must be editable
+    (draft, owner or collaborator).
     """
 
     # 1. Verify Chapter exists and belongs to the training
@@ -1944,8 +1949,21 @@ async def upload_chapter_content(
     if not training or not await check_training_edit_permission(training, current_user, db):
         raise HTTPException(status_code=403, detail="Not enough permissions to edit this training")
 
-    if chapter.content_type != "SCORM":
-        raise HTTPException(status_code=400, detail="Only SCORM chapters support ZIP upload presently")
+    chapter_type = str(chapter.content_type) if chapter.content_type else ""
+    if chapter_type.endswith(".PDF") or chapter_type == "PDF":
+        return await _handle_pdf_upload(
+            db=db,
+            file=file,
+            chapter=chapter,
+            tenant_id=tenant_id,
+            training_id=training_id,
+            current_user=current_user,
+        )
+    if not (chapter_type.endswith(".SCORM") or chapter_type == "SCORM"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only SCORM and PDF chapters accept file uploads on this endpoint.",
+        )
 
     # MIME type check — reject anything that is clearly not a ZIP
     ALLOWED_SCORM_MIME_TYPES = {
@@ -2255,6 +2273,60 @@ async def complete_chapter(
     await _process_training_completion(training_id, db, current_user, tenant_id)
     
     return {"status": "success", "chapter_id": chapter_id}
+
+
+ALLOWED_PDF_MIME_TYPES = {
+    "application/pdf",
+    "application/x-pdf",
+    "application/octet-stream",  # some clients send this for .pdf
+}
+
+
+async def _handle_pdf_upload(
+    *,
+    db: AsyncSession,
+    file: UploadFile,
+    chapter,
+    tenant_id: str,
+    training_id: str,
+    current_user: deps.UserAuth,
+):
+    """Save an uploaded PDF and point the chapter's content_data.url at it.
+
+    Mirrors the SCORM upload flow but stores into /mnt/images/pdfs/ and uses
+    the /storage/pdfs/ nginx route. The viewer already renders PDFs from
+    content_data.url via an iframe, so no viewer changes are required.
+    """
+    if file.content_type not in ALLOWED_PDF_MIME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Only PDF files are accepted for PDF chapters.",
+        )
+
+    try:
+        url = storage.save_pdf_file(file, tenant_id, training_id, chapter.id)
+    except Exception as e:
+        logger.error(f"PDF save error for chapter {chapter.id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to save PDF: {e}")
+
+    # Preserve any existing description the creator set on the chapter.
+    existing = dict(chapter.content_data) if chapter.content_data else {}
+    existing["url"] = url
+    existing["original_filename"] = file.filename
+    chapter.content_data = existing
+
+    await log_audit(
+        db, tenant_id, current_user.id, "UPLOAD_PDF", "chapter", chapter.id,
+        {"training_id": training_id, "filename": file.filename},
+    )
+    await db.commit()
+    await db.refresh(chapter)
+
+    # Bust caches so the new URL surfaces immediately
+    await invalidate_cache("training_structure", tenant_id)
+    await invalidate_cache("training_detail", tenant_id)
+
+    return chapter
 
 
 async def _process_training_completion(

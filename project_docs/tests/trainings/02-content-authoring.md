@@ -51,11 +51,17 @@ Tests covering Video, Rich Text, and PDF lesson authoring. See `03-quiz-engine.m
 
 ## PDF Lessons
 
+Storage: PDFs are saved to `/mnt/images/pdfs/<tenant_id>/<training_id>/<chapter_id>.pdf` (the `lms_images` Docker volume) and served by the gateway under `/storage/pdfs/`. The viewer embeds them in an `<iframe>` so they render inline. The chapter must be created with `content_type=PDF` first; the file is then uploaded via `POST /trainings/{training_id}/chapters/{chapter_id}/upload`, which writes `content_data.url` + `content_data.original_filename` on success.
+
 | ID | Scenario | Pre-condition | Steps | Expected | Type |
 |---|---|---|---|---|---|
-| TC-CON-25 | Upload PDF as lesson | Draft training with chapter | Select PDF lesson type, upload file | 201 — stored in `lms_images` volume under `{tenant_id}/documents/` | happy |
-| TC-CON-26 | PDF renders in-browser in viewer | Training with PDF lesson assigned | Open lesson in viewer | PDF displayed in embedded viewer | happy |
-| TC-CON-27 | "Mark Complete" marks PDF lesson complete | Learner on PDF lesson | Click Mark Complete | Lesson complete, next unlocked | happy |
-| TC-CON-28 | PDF lesson follows sequential gating | Training with PDF as lesson 2 | Learner tries to access PDF before completing lesson 1 | Lesson 2 locked | happy |
-| TC-CON-29 | PDF from another tenant is inaccessible | Two tenants with PDF lessons | Tenant B learner requests Tenant A's PDF URL | 403 | isolation |
-| TC-CON-30 | Non-PDF file upload rejected as PDF lesson | Draft training | Attempt to upload a DOCX as PDF lesson | 422 — rejected | edge |
+| TC-CON-25 | Add PDF chapter type in the editor | Draft training open in editor | Click + Chapter → select **PDF** content type | PDF panel appears with file picker, description textarea, and per-file size hint | happy |
+| TC-CON-26 | Upload PDF persists URL and filename | Draft training with PDF chapter | Save chapter with a `.pdf` file attached | 200 — `content_data.url = /storage/pdfs/<tenant>/<training>/<chapter>.pdf`, `original_filename` set | happy |
+| TC-CON-27 | PDF renders inline in the viewer | Learner on a PDF lesson | Open lesson in viewer | `<iframe>` loads the PDF inline at full chapter width | happy |
+| TC-CON-28 | "Mark Complete" marks PDF lesson complete | Learner on PDF lesson | Click Mark Complete | Lesson complete, next unlocked | happy |
+| TC-CON-29 | PDF lesson follows sequential gating | Training with PDF as lesson 2 | Learner tries to access PDF before completing lesson 1 | Lesson 2 locked | happy |
+| TC-CON-30 | Non-PDF MIME rejected by upload endpoint | Draft training with PDF chapter | Upload a `.exe` / `.docx` to the chapter | `400 — Invalid file type. Only PDF files are accepted for PDF chapters.` | edge |
+| TC-CON-31 | VIDEO chapter rejects PDF upload | Draft training with VIDEO chapter | Upload a `.pdf` to the chapter | `400 — Only SCORM and PDF chapters accept file uploads on this endpoint.` | edge |
+| TC-CON-32 | Editor blocks save without a PDF file | New PDF chapter (not editing existing) | Click Save Chapter without choosing a file | Toast: "Please choose a PDF file to upload." — no API call fires | edge |
+| TC-CON-33 | Editing an existing PDF chapter without re-uploading | Existing PDF chapter | Open editor, change title/description, save without picking a new file | Chapter title/description update; URL and filename unchanged | happy |
+| TC-CON-34 | PDF from another tenant is inaccessible | Two tenants with PDF lessons | Tenant B learner requests Tenant A's PDF URL | 403 — gateway `auth_request` rejects | isolation |

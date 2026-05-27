@@ -39,7 +39,8 @@ class Settings(BaseSettings):
     INTERNAL_API_KEY: str = "super-secret-internal-key"
     
     # Internal service URLs (used for inter-service calls)
-    CORE_SERVICE_URL: str = "http://core-service:8001"
+    # 8000 is the container-internal port; 8001 is only the host-side mapping
+    CORE_SERVICE_URL: str = "http://core-service:8000"
 
     # Auth
     SESSION_TOKEN_EXPIRE_MINUTES: int = 30

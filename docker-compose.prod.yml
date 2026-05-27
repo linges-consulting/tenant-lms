@@ -1,14 +1,26 @@
 services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./app/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - lms-network
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
   gateway:
     build:
       context: ./app/gateway
-    ports:
-      - "80:80"
     volumes:
       - lms_videos:/mnt/videos
       - lms_images:/mnt/images
       - lms_scorm:/mnt/scorm
-      - ./app/gateway/nginx.conf:/etc/nginx/nginx.conf:ro
     networks:
       - lms-network
     depends_on:
@@ -16,6 +28,7 @@ services:
       - auth-service
       - core-service
       - notification-service
+    restart: unless-stopped
 
   auth-service:
     build:
@@ -29,12 +42,13 @@ services:
       - INTERNAL_JWT_SECRET=${INTERNAL_JWT_SECRET}
       - ENVIRONMENT=prod
       - FRONTEND_URL=${FRONTEND_URL}
-      - USE_MAILGUN=True
-      - MAILGUN_API_KEY=${MAILGUN_API_KEY}
-      - MAILGUN_DOMAIN=${MAILGUN_DOMAIN}
-      - MAILGUN_BASE_URL=${MAILGUN_BASE_URL:-https://api.mailgun.net}
-      - FROM_EMAIL=${FROM_EMAIL}
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      - LOGIN_MAX_ATTEMPTS=${LOGIN_MAX_ATTEMPTS:-5}
+      - LOGIN_LOCKOUT_MINUTES=${LOGIN_LOCKOUT_MINUTES:-15}
+      - LOGIN_FORCE_RESET_ATTEMPTS=${LOGIN_FORCE_RESET_ATTEMPTS:-10}
+      - SEED_ADMIN_EMAIL=${SEED_ADMIN_EMAIL}
+      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD}
     volumes:
       - lms_videos:/mnt/videos
       - lms_images:/mnt/images
@@ -46,6 +60,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: unless-stopped
 
   core-service:
     build:
@@ -59,7 +74,7 @@ services:
       - INTERNAL_JWT_SECRET=${INTERNAL_JWT_SECRET}
       - AUTH_SERVICE_URL=http://auth-service:8000
       - ENVIRONMENT=prod
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+      - SCORM_MAX_UPLOAD_MB=${SCORM_MAX_UPLOAD_MB:-250}
     volumes:
       - lms_videos:/mnt/videos
       - lms_images:/mnt/images
@@ -71,6 +86,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: unless-stopped
 
   notification-service:
     build:
@@ -88,8 +104,8 @@ services:
       - MAILGUN_API_KEY=${MAILGUN_API_KEY}
       - MAILGUN_DOMAIN=${MAILGUN_DOMAIN}
       - MAILGUN_BASE_URL=${MAILGUN_BASE_URL:-https://api.mailgun.net}
+      - MAILGUN_AUTHORIZED_RECIPIENT=${MAILGUN_AUTHORIZED_RECIPIENT}
       - FROM_EMAIL=${FROM_EMAIL}
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
     networks:
       - lms-network
     depends_on:
@@ -97,6 +113,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: unless-stopped
 
   frontend:
     build:
@@ -105,6 +122,7 @@ services:
       target: prod
     networks:
       - lms-network
+    restart: unless-stopped
 
   postgres:
     image: postgres:15-alpine
@@ -122,6 +140,7 @@ services:
       retries: 10
     networks:
       - lms-network
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -134,6 +153,7 @@ services:
       retries: 5
     networks:
       - lms-network
+    restart: unless-stopped
 
 networks:
   lms-network:
@@ -145,3 +165,5 @@ volumes:
   lms_scorm:
   postgres_data:
   redis_data:
+  caddy_data:
+  caddy_config:

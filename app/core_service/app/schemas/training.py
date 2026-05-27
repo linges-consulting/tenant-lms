@@ -63,7 +63,14 @@ class TrainingInDBBase(TrainingBase):
     @field_validator('tags', mode='before')
     @classmethod
     def coerce_tags(cls, v: Any) -> List[str]:
-        return v if v is not None else []
+        # Defensive: legacy / mis-seeded rows occasionally store the JSON column
+        # as `{}` (empty dict) instead of `[]`. Treat it as no tags rather than
+        # blowing up serialization of the whole training.
+        if v is None:
+            return []
+        if isinstance(v, dict):
+            return []
+        return v
 
 # Properties to return to client
 class Training(TrainingInDBBase):

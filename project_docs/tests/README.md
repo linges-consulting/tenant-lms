@@ -115,3 +115,4 @@ Complements the backend automation spec in `project_docs/tests.md`.
 | G-02 | Assignment due dates — backend exists but UI does not expose them | TC-ASN-24 to TC-ASN-33 |
 | G-03 | New group member auto-enrollment — adding user to group with active assignments | TC-ASN-21 to TC-ASN-23 |
 | G-04 | Assignment user picker — must filter users already covered by a selected group | TC-ASN-18 to TC-ASN-20 |
+| G-05 | PDF auth guard — `/storage/pdfs/` served without authentication (same shape as G-01 SCORM) | TC-CON-34 |

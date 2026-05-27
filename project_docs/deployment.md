@@ -55,113 +55,71 @@ Nginx serves all three volumes directly using `auth_request` for access validati
 |---|---|---|
 | `SCORM_MAX_UPLOAD_MB` | Max SCORM package upload size in MB | `250` |
 
+### Production seed
+
+| Variable | Description |
+|---|---|
+| `SEED_ADMIN_EMAIL` | Email for the initial SysAdmin account created on first deploy |
+| `SEED_ADMIN_PASSWORD` | Password for the initial SysAdmin account |
+
 ### Production only
 
 | Variable | Description |
 |---|---|
-| `FRONTEND_URL` | Public-facing URL (e.g. `https://yourlms.com`) |
+| `FRONTEND_URL` | Public-facing URL (e.g. `https://lms.example.com`) |
 | `ENVIRONMENT` | `prod` or `dev` |
-| `REDIS_URL` | External Redis URL if not using the compose redis service |
+| `FRONTEND_DOMAIN` | Public domain for the LMS — Caddy uses this for TLS cert provisioning |
+| `LETSENCRYPT_EMAIL` | Email for Let's Encrypt cert expiry notifications |
+
+### GitHub Actions secrets (set in repo Settings → Secrets)
+
+| Secret | Description |
+|---|---|
+| `PROD_SSH_HOST` | Production server IP or hostname |
+| `PROD_SSH_USER` | SSH username on production server |
+| `PROD_SSH_KEY` | Private SSH key for production server |
 
 ---
 
 ## 3. CI/CD — GitHub Actions
 
-Deployment is triggered automatically on every push to the `main` branch.
+Two workflow files handle the full cycle.
 
-### Workflow overview
+### Workflow: CI (`ci.yml`) — runs on every PR targeting `main`
 
 ```
-push to main
-  └── GitHub Actions
-        ├── Run tests (all services)
-        ├── Lint frontend
-        └── Deploy to production
-              ├── SSH into server
-              ├── git pull
-              ├── docker compose build
-              ├── Run Alembic migrations (per service)
-              └── docker compose up -d
+PR opened / updated targeting main
+  └── .github/workflows/ci.yml
+        ├── Auth Service Tests    ─┐
+        ├── Core Service Tests     ├── all run in parallel
+        ├── Notification Tests     │
+        └── Frontend Lint         ─┘
 ```
 
-### Workflow file: `.github/workflows/deploy.yml`
+Set these as required status checks (Settings → Branches → protection rule for `main`) so the merge button is locked until all pass.
 
-```yaml
-name: Deploy to Production
+### Workflow: Deploy (`deploy.yml`) — runs on every push to `main`
 
-on:
-  push:
-    branches: [main]
-
-jobs:
-  test:
-    name: Run Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build and test auth-service
-        run: |
-          docker compose -f docker-compose.yml build auth-service
-          docker compose -f docker-compose.yml run --rm auth-service pytest tests/ -v
-
-      - name: Build and test core-service
-        run: |
-          docker compose -f docker-compose.yml build core-service
-          docker compose -f docker-compose.yml run --rm core-service pytest tests/ -v
-
-      - name: Build and test notification-service
-        run: |
-          docker compose -f docker-compose.yml build notification-service
-          docker compose -f docker-compose.yml run --rm notification-service pytest tests/ -v
-
-      - name: Lint frontend
-        run: |
-          docker compose -f docker-compose.yml build frontend
-          docker compose -f docker-compose.yml run --rm frontend npm run lint
-
-  deploy:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          script: |
-            cd /opt/lms
-
-            # Pull latest code
-            git pull origin main
-
-            # Build new images
-            docker compose -f docker-compose.prod.yml build
-
-            # Run migrations (safe — Alembic only applies unapplied)
-            docker compose -f docker-compose.prod.yml run --rm auth-service alembic upgrade head
-            docker compose -f docker-compose.prod.yml run --rm core-service alembic upgrade head
-            docker compose -f docker-compose.prod.yml run --rm notification-service alembic upgrade head
-
-            # Restart all services
-            docker compose -f docker-compose.prod.yml up -d
-
-            # Clean up unused images
-            docker image prune -f
+```
+merge dev → main  (push to main)
+  └── .github/workflows/deploy.yml
+        ├── Auth Service Tests    ─┐
+        ├── Core Service Tests     ├── re-run as a safety net
+        ├── Notification Tests     │     (guards against direct pushes)
+        ├── Frontend Lint         ─┘
+        │
+        └── deploy  ← only runs if all tests pass
+              ├── SSH into /opt/lms
+              ├── git pull origin main
+              ├── alembic upgrade head (per service, before restart)
+              ├── docker compose up --build -d
+              └── seed_data.py --production (idempotent, no-op if seeded)
 ```
 
-### GitHub Secrets required
+### What lives where
 
-| Secret | Description |
-|---|---|
-| `PROD_HOST` | Production server IP or hostname |
-| `PROD_USER` | SSH username on production server |
-| `PROD_SSH_KEY` | Private SSH key for production server |
-
-Production environment variables (Mailgun, JWT secrets, DB credentials) are stored in a `.env` file on the production server at `/opt/lms/.env` — never in GitHub Secrets or the repository.
+- **GitHub Secrets** — SSH credentials only (see §2 above)
+- **`/opt/lms/.env`** on the server — all runtime secrets (DB passwords, JWT secrets, Mailgun keys, etc.) — never committed to the repository
 
 ---
 
@@ -228,57 +186,53 @@ docker compose run --rm core-service python seed_data.py --mock
 
 ---
 
-## 7. Manual Deployment Runbook
+## 7. First-Time Server Setup
 
-For emergency manual deployments or first-time server setup:
+Run this once on the VPS before the first automated deploy. Subsequent deploys are fully automated via GitHub Actions.
+
+**Prerequisites:**
+- Docker and `docker compose` installed on the server
+- DNS A record for `FRONTEND_DOMAIN` pointing at the server's public IP (Caddy needs this for Let's Encrypt)
 
 ```bash
-# 1. SSH into server
+# 1. SSH into server and clone the repo
 ssh user@your-server
-
-# 2. Clone repo (first time only)
-git clone https://github.com/your-org/custom-lms.git /opt/lms
+git clone https://github.com/<owner>/CustomLMS4.git /opt/lms
 cd /opt/lms
 
-# 3. Create .env file from template (first time only)
+# 2. Create .env from the template and fill in all production values
 cp .env.example .env
-# Edit .env with production values
+# Required values to set: POSTGRES_USER, POSTGRES_PASSWORD, all JWT secrets,
+# FRONTEND_URL, FRONTEND_DOMAIN, LETSENCRYPT_EMAIL,
+# MAILGUN_*, SEED_ADMIN_EMAIL, SEED_ADMIN_PASSWORD, ALLOWED_ORIGINS
+vim .env
 
-# 4. Create volumes (first time only)
-docker volume create lms_videos
-docker volume create lms_images
-docker volume create lms_scorm
-docker volume create postgres_data
-docker volume create redis_data
+# 3. Build images and start all services
+docker compose --env-file .env -f docker-compose.prod.yml up --build -d
 
-# 5. Build and start
-docker compose -f docker-compose.prod.yml build
-docker compose -f docker-compose.prod.yml up -d
+# 4. Run migrations
+docker compose --env-file .env -f docker-compose.prod.yml run --rm auth-service alembic upgrade head
+docker compose --env-file .env -f docker-compose.prod.yml run --rm core-service alembic upgrade head
+docker compose --env-file .env -f docker-compose.prod.yml run --rm notification-service alembic upgrade head
 
-# 6. Run migrations
-docker compose -f docker-compose.prod.yml run --rm auth-service alembic upgrade head
-docker compose -f docker-compose.prod.yml run --rm core-service alembic upgrade head
-docker compose -f docker-compose.prod.yml run --rm notification-service alembic upgrade head
+# 5. Seed production data (creates initial SysAdmin + default certificate template)
+docker compose --env-file .env -f docker-compose.prod.yml run --rm auth-service python seed_data.py --production
 
-# 7. Run production seed (first time only)
-docker compose -f docker-compose.prod.yml run --rm auth-service python seed_data.py --production
-docker compose -f docker-compose.prod.yml run --rm core-service python seed_data.py --production
-
-# 8. Verify services are running
+# 6. Verify
 docker compose -f docker-compose.prod.yml ps
-docker compose -f docker-compose.prod.yml logs --tail=50
+curl -I https://<FRONTEND_DOMAIN>     # should return 200 with valid TLS cert
 ```
 
----
+### Rollback
 
-## 8. Known Issues in Current Docker Compose Files
+To roll back to a previous commit, check out that commit on the server and rebuild:
 
-The following must be fixed before the next deployment:
+```bash
+ssh user@your-server
+cd /opt/lms
+git checkout <previous-sha>
+docker compose --env-file .env -f docker-compose.prod.yml up --build -d
+```
 
-- [ ] Both files use `./src/` paths — actual code lives in `./app/`
-- [ ] `email-worker` service must be removed (merged into `notification-service`)
-- [ ] `lms_media` volume needs to be replaced with `lms_videos`, `lms_images`, `lms_scorm`
-- [ ] Mailgun env vars must move from `auth-service` to `notification-service` in prod file
-- [ ] `SCORM_MAX_UPLOAD_MB` env var missing from all services
-- [ ] `FRONTEND_URL` missing from dev compose (needed for Magic Link emails)
-- [ ] JWT secret env vars (`JWT_ROOT_SECRET`, `EXTERNAL_JWT_SECRET`, `INTERNAL_JWT_SECRET`) not consistently defined across services
+Migration rollback (if the previous version requires an older schema) must be done manually with `alembic downgrade -1` before checking out the older commit.
+

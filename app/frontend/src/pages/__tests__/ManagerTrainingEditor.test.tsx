@@ -67,8 +67,13 @@ vi.mock('../../components/TrainingAuditTimeline', () => ({
 }));
 
 // sonner toasts try to mount portals.
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
 vi.mock('sonner', () => ({
-    toast: { success: vi.fn(), error: vi.fn() },
+    toast: {
+        success: (...a: unknown[]) => toastSuccess(...a),
+        error: (...a: unknown[]) => toastError(...a),
+    },
 }));
 
 // ---- Fixtures -----------------------------------------------------------
@@ -358,7 +363,7 @@ describe('ManagerTrainingEditor — curriculum CRUD', () => {
         expect((payload.content_data as { text: string }).text).toContain('Some content body');
     });
 
-    it('Add Chapter rejects an empty title (no API call, inline validation)', async () => {
+    it('Add Chapter rejects an empty title (no API call, inline validation + toast)', async () => {
         const user = userEvent.setup();
         renderEditor();
         await waitFor(() => screen.getByText('Editable Training'));
@@ -375,6 +380,136 @@ describe('ManagerTrainingEditor — curriculum CRUD', () => {
             expect(screen.getByText(/Chapter title is required/i)).toBeInTheDocument();
         });
         expect(createChapter).not.toHaveBeenCalled();
+        // Toast surfaces the same problem so the user notices without scrolling
+        expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/title is required/i));
+    });
+
+    it('Add Chapter toasts on Video URL validation failure', async () => {
+        const user = userEvent.setup();
+        renderEditor();
+        await waitFor(() => screen.getByText('Editable Training'));
+
+        await user.click(screen.getByRole('button', { name: /^Chapter$/ }));
+        // Video is the default type — fill title + a malformed URL
+        const chapterTitle = await screen.findByPlaceholderText(/Fundamental Concepts/i);
+        await user.type(chapterTitle, 'Bad URL Chapter');
+        const urlInput = screen.getByPlaceholderText(/YouTube, Vimeo, or MP4 URL/i);
+        await user.type(urlInput, 'not-a-url');
+
+        const saveBtns = screen.getAllByRole('button', { name: /Save Chapter/i });
+        await user.click(saveBtns[0]);
+
+        expect(createChapter).not.toHaveBeenCalled();
+        expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/valid URL/i));
+    });
+
+    it('Add Chapter toasts on backend save failure', async () => {
+        const user = userEvent.setup();
+        createChapter.mockRejectedValueOnce({ message: 'A chapter with this title already exists.' });
+        renderEditor();
+        await waitFor(() => screen.getByText('Editable Training'));
+
+        await user.click(screen.getByRole('button', { name: /^Chapter$/ }));
+        await user.click(screen.getByRole('button', { name: /^Text$/ }));
+
+        const chapterTitle = await screen.findByPlaceholderText(/Fundamental Concepts/i);
+        await user.type(chapterTitle, 'Dup Chapter');
+        const rte = screen.getByTestId('rich-text-editor');
+        await user.type(rte, 'body');
+
+        const saveBtns = screen.getAllByRole('button', { name: /Save Chapter/i });
+        await user.click(saveBtns[0]);
+
+        await waitFor(() => {
+            expect(createChapter).toHaveBeenCalledTimes(1);
+        });
+        await waitFor(() => {
+            expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/already exists/i));
+        });
+    });
+
+    it('PDF chapter type shows file input and uploads via uploadChapterContent', async () => {
+        const user = userEvent.setup();
+        renderEditor();
+        await waitFor(() => screen.getByText('Editable Training'));
+
+        await user.click(screen.getByRole('button', { name: /^Chapter$/ }));
+
+        // The PDF type button is exposed alongside Video / Text / Quiz / SCORM
+        const pdfTypeBtn = screen.getByRole('button', { name: /^PDF$/ });
+        await user.click(pdfTypeBtn);
+
+        // PDF description textarea + file input appear
+        expect(screen.getByText(/PDF Document/i)).toBeInTheDocument();
+        expect(screen.getByText(/Click to upload a PDF/i)).toBeInTheDocument();
+
+        // Fill chapter title and upload a file
+        const chapterTitle = await screen.findByPlaceholderText(/Fundamental Concepts/i);
+        await user.type(chapterTitle, 'Reference doc');
+
+        const fileInput = document.querySelector<HTMLInputElement>('input[type="file"][accept*="pdf"]');
+        expect(fileInput, 'expected a PDF file input').toBeTruthy();
+        const pdfFile = new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], 'doc.pdf', { type: 'application/pdf' });
+        await user.upload(fileInput!, pdfFile);
+
+        // Save → createChapter then uploadChapterContent with the PDF
+        const saveBtns = screen.getAllByRole('button', { name: /Save Chapter/i });
+        await user.click(saveBtns[0]);
+
+        await waitFor(() => {
+            expect(createChapter).toHaveBeenCalledTimes(1);
+        });
+        const [, payload] = createChapter.mock.calls[0];
+        expect(payload.content_type).toBe('PDF');
+        // The content_data only carries description; the URL is filled by the upload endpoint
+        expect((payload.content_data as Record<string, unknown>).description).toBeDefined();
+        expect((payload.content_data as Record<string, unknown>).url).toBeUndefined();
+
+        await waitFor(() => {
+            expect(uploadChapterContent).toHaveBeenCalledTimes(1);
+        });
+        const [trainingId, chapterId, file] = uploadChapterContent.mock.calls[0];
+        expect(trainingId).toBe(TRAINING_ID);
+        expect(chapterId).toBe('new-ch');
+        expect(file).toBe(pdfFile);
+    });
+
+    it('PDF chapter without a file shows a toast and does not call the API', async () => {
+        const user = userEvent.setup();
+        renderEditor();
+        await waitFor(() => screen.getByText('Editable Training'));
+
+        await user.click(screen.getByRole('button', { name: /^Chapter$/ }));
+        await user.click(screen.getByRole('button', { name: /^PDF$/ }));
+
+        const chapterTitle = await screen.findByPlaceholderText(/Fundamental Concepts/i);
+        await user.type(chapterTitle, 'No File PDF');
+
+        const saveBtns = screen.getAllByRole('button', { name: /Save Chapter/i });
+        await user.click(saveBtns[0]);
+
+        expect(createChapter).not.toHaveBeenCalled();
+        expect(uploadChapterContent).not.toHaveBeenCalled();
+        expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/PDF/i));
+    });
+
+    it('Add Module toasts on backend save failure', async () => {
+        const user = userEvent.setup();
+        createModule.mockRejectedValueOnce({ message: 'Module name already in use.' });
+        renderEditor();
+        await waitFor(() => screen.getByText('Editable Training'));
+
+        await user.click(screen.getByRole('button', { name: /^Module$/ }));
+        const titleInput = await screen.findByPlaceholderText(/Introduction|Module/i);
+        await user.type(titleInput, 'Dup Module');
+        await user.click(screen.getByRole('button', { name: /Save Module/i }));
+
+        await waitFor(() => {
+            expect(createModule).toHaveBeenCalledTimes(1);
+        });
+        await waitFor(() => {
+            expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/already in use/i));
+        });
     });
 
     it('Delete chapter button opens confirmation and calls deleteChapter on confirm', async () => {
