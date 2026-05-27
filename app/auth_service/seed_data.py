@@ -219,5 +219,47 @@ async def seed():
     print("Seeding complete.")
 
 
+async def seed_production():
+    """Production seed: create only the SysAdmin. Never truncates. Idempotent."""
+    email = os.environ.get("SEED_ADMIN_EMAIL")
+    password = os.environ.get("SEED_ADMIN_PASSWORD")
+    if not email or not password:
+        print("ERROR: SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD must be set.")
+        sys.exit(1)
+
+    engine = create_async_engine(settings.ASYNC_DB_URL)
+    async with engine.begin() as conn:
+        user_id = str(uuid.uuid4())
+        hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        now = datetime.utcnow()
+        await conn.execute(
+            text(
+                """
+                INSERT INTO users (id, email, username, hashed_password, full_name, avatar_url, is_sysadmin, is_active, status, created_at, updated_at)
+                VALUES (:id, :email, :username, :hashed, :full_name, :avatar_url, true, true, 'ACTIVE', :now, :now)
+                ON CONFLICT (email) DO UPDATE SET
+                  hashed_password = EXCLUDED.hashed_password,
+                  is_sysadmin = true,
+                  is_active = true,
+                  status = 'ACTIVE'
+                """
+            ),
+            {
+                "id": user_id,
+                "email": email,
+                "username": email.split("@")[0],
+                "hashed": hashed,
+                "full_name": "Global Admin",
+                "avatar_url": "avatar1",
+                "now": now,
+            },
+        )
+        print(f"SysAdmin ensured: {email}")
+    print("Production seed complete.")
+
+
 if __name__ == "__main__":
-    asyncio.run(seed())
+    if "--production" in sys.argv:
+        asyncio.run(seed_production())
+    else:
+        asyncio.run(seed())
