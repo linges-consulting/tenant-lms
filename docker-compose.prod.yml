@@ -4,6 +4,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      - FRONTEND_DOMAIN=${FRONTEND_DOMAIN}
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
     volumes:
       - ./app/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
