@@ -56,7 +56,7 @@ export const ManageEditorsModal: React.FC<ManageEditorsModalProps> = ({
         try {
             const users = await userService.listTenantUsers();
             const creators = users.filter(u => {
-                const memberships = (u.members || (u as Record<string, unknown[]>)['memberships'] || []) as { is_training_creator?: boolean; isTrainingCreator?: boolean; role?: string }[];
+                const memberships = (u.members || ((u as unknown) as Record<string, unknown[]>)['memberships'] || []) as { is_training_creator?: boolean; isTrainingCreator?: boolean; role?: string }[];
                 return memberships.some((m) =>
                     m.is_training_creator ||
                     m.isTrainingCreator ||

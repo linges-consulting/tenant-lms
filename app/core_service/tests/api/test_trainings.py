@@ -19,6 +19,7 @@ from app.models.chapter import Chapter, ContentType
 from app.models.enrollment import Enrollment
 from app.models.assignment import TrainingAssignment
 from app.models.collaborator import TrainingCollaborator
+from app.models.progress import UserProgress
 from tests.conftest import override_current_user, make_user_auth
 
 
@@ -789,20 +790,20 @@ async def test_send_to_draft_owner_success(client, db_session):
 
 
 # ---------------------------------------------------------------------------
-# T-SD-02: send-to-draft succeeds for a Business Manager (non-owner)
+# T-SD-02: send-to-draft by a Business Manager (non-owner) is now forbidden
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_send_to_draft_manager_success(client, db_session):
+async def test_send_to_draft_manager_non_owner_forbidden(client, db_session):
     """
-    BR-301a: A Business Manager who is NOT the training owner can send a
-    Ready training back to Draft.
+    BR-301: Only the training owner can send a Ready training to Draft.
+    A Business Manager who is NOT the owner must receive 403.
+    Managers use /unpublish (published → ready) then the creator sends to draft.
     """
     tenant_id = str(uuid.uuid4())
     creator = _make_creator(tenant_id)
     manager = _make_manager(tenant_id)
 
-    # Manager is a different user from the creator
     training = _make_ready_training(tenant_id, creator.id)
     db_session.add(training)
     await db_session.commit()
@@ -810,10 +811,7 @@ async def test_send_to_draft_manager_success(client, db_session):
     _set_user(manager)
     try:
         resp = await client.post(f"/api/v1/trainings/{training.id}/send-to-draft")
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-        data = resp.json()
-        assert data["is_ready"] is False, f"is_ready should be False: {data}"
-        assert data["lifecycle_status"] == "draft", f"lifecycle_status should be 'draft': {data}"
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
     finally:
         _clear_overrides()
 
@@ -845,20 +843,20 @@ async def test_send_to_draft_not_ready_fails(client, db_session):
 
 
 # ---------------------------------------------------------------------------
-# T-SD-04: send-to-draft from Published state — Manager succeeds
+# T-SD-04: send-to-draft from Published state is blocked for everyone
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_send_to_draft_from_published_manager_success(client, db_session):
+async def test_send_to_draft_from_published_blocked(client, db_session):
     """
-    BR-301a: A Business Manager can send a Published training back to Draft.
-    Response must be 200 and lifecycle_status == 'draft'.
+    BR-301: Published → Draft is not a valid transition via send-to-draft.
+    A Manager must use /unpublish (published → ready) first.
+    Even a manager calling send-to-draft on a published training gets 400.
     """
     tenant_id = str(uuid.uuid4())
     creator = _make_creator(tenant_id)
     manager = _make_manager(tenant_id)
 
-    # Published training: is_published=True, is_ready=False
     training = _make_draft_training(tenant_id, creator.id, is_published=True)
     db_session.add(training)
     await db_session.commit()
@@ -866,29 +864,26 @@ async def test_send_to_draft_from_published_manager_success(client, db_session):
     _set_user(manager)
     try:
         resp = await client.post(f"/api/v1/trainings/{training.id}/send-to-draft")
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-        data = resp.json()
-        assert data["is_published"] is False, f"is_published should be False: {data}"
-        assert data["is_ready"] is False, f"is_ready should be False: {data}"
-        assert data["lifecycle_status"] == "draft", f"lifecycle_status should be 'draft': {data}"
+        assert resp.status_code == 403, f"Expected 403 (not owner), got {resp.status_code}: {resp.text}"
     finally:
         _clear_overrides()
 
 
 # ---------------------------------------------------------------------------
-# T-SD-04b: send-to-draft from Published state — Creator is forbidden
+# T-SD-04b: send-to-draft from Published state — owner gets 400 (must unpublish first)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_send_to_draft_from_published_creator_forbidden(client, db_session):
+async def test_send_to_draft_from_published_owner_blocked(client, db_session):
     """
-    BR-301a: A Training Creator (even the owner) cannot unpublish a training.
-    Must return 403.
+    BR-301: Even the training owner cannot send a Published training to Draft
+    via send-to-draft. Must return 400 with a message directing them to use
+    /unpublish first. Managers use /unpublish (published → ready); then the
+    owner can send to draft.
     """
     tenant_id = str(uuid.uuid4())
     creator = _make_creator(tenant_id)
 
-    # Published training: is_published=True, is_ready=False
     training = _make_draft_training(tenant_id, creator.id, is_published=True)
     db_session.add(training)
     await db_session.commit()
@@ -896,7 +891,8 @@ async def test_send_to_draft_from_published_creator_forbidden(client, db_session
     _set_user(creator)
     try:
         resp = await client.post(f"/api/v1/trainings/{training.id}/send-to-draft")
-        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+        assert "unpublish" in resp.json()["detail"].lower(), f"Error should mention unpublish: {resp.json()}"
     finally:
         _clear_overrides()
 
@@ -966,6 +962,215 @@ async def test_send_to_draft_not_found(client, db_session):
     try:
         resp = await client.post(f"/api/v1/trainings/{uuid.uuid4()}/send-to-draft")
         assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# /unpublish endpoint tests (BR-301: published → ready, manager only)
+# ---------------------------------------------------------------------------
+
+def _make_published_training(tenant_id: str, created_by_id: str, **kwargs) -> Training:
+    """Build a Training ORM object in Published state."""
+    defaults = dict(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        title="Published Training",
+        description="A published description",
+        category="Safety",
+        structure_type="flat",
+        is_published=True,
+        is_active=True,
+        is_archived=False,
+        is_ready=False,
+        requires_certificate=False,
+        created_by_id=created_by_id,
+    )
+    defaults.update(kwargs)
+    return Training(**defaults)
+
+
+# T-UN-01: Manager can unpublish a published training → returns to Ready state
+@pytest.mark.asyncio
+async def test_unpublish_manager_success(client, db_session):
+    """
+    BR-301: A Business Manager can unpublish a published training.
+    Result: is_published=False, is_ready=True (lifecycle_status='ready').
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+
+    training = _make_published_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/unpublish")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        data = resp.json()
+        assert data["is_published"] is False, f"is_published should be False: {data}"
+        assert data["is_ready"] is True, f"is_ready should be True (back to ready): {data}"
+        assert data["lifecycle_status"] == "ready", f"lifecycle_status should be 'ready': {data}"
+    finally:
+        _clear_overrides()
+
+
+# T-UN-02: Unpublish resets learner progress and enrollments
+@pytest.mark.asyncio
+async def test_unpublish_resets_learner_progress(client, db_session):
+    """
+    BR-301: Unpublishing resets all learner progress — enrollments are
+    un-completed and UserProgress rows are deleted.
+    """
+    from sqlalchemy import select as sa_select
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+
+    training = _make_published_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.flush()
+
+    learner_id = str(uuid.uuid4())
+    enrollment = Enrollment(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        user_id=learner_id,
+        training_id=training.id,
+        is_completed=True,
+        completed_at=datetime.now(timezone.utc),
+        training_version_id=1,
+    )
+    progress = UserProgress(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        user_id=learner_id,
+        training_id=training.id,
+        chapter_id=str(uuid.uuid4()),
+        is_completed=True,
+    )
+    db_session.add(enrollment)
+    db_session.add(progress)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/unpublish")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+        await db_session.refresh(enrollment)
+        assert enrollment.is_completed is False, "Enrollment should be un-completed"
+        assert enrollment.completed_at is None, "completed_at should be cleared"
+        assert enrollment.training_version_id is None, "training_version_id should be cleared"
+
+        remaining = await db_session.execute(
+            sa_select(UserProgress).where(UserProgress.training_id == training.id)
+        )
+        assert remaining.scalars().all() == [], "UserProgress rows should be deleted"
+    finally:
+        _clear_overrides()
+
+
+# T-UN-03: Creator (non-manager) cannot unpublish → 403
+@pytest.mark.asyncio
+async def test_unpublish_creator_forbidden(client, db_session):
+    """
+    BR-301: Only a Business Manager can unpublish. A Training Creator who is
+    the owner but does not hold the Business Manager role must receive 403.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = _make_published_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/unpublish")
+        assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# T-UN-04: Unpublishing a non-published training → 400
+@pytest.mark.asyncio
+async def test_unpublish_not_published_fails(client, db_session):
+    """
+    BR-301: Calling /unpublish on a training that is not published must
+    return 400.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+
+    training = _make_ready_training(tenant_id, creator.id)  # is_published=False
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/unpublish")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# T-UN-05: Unpublishing an archived training → 400
+@pytest.mark.asyncio
+async def test_unpublish_archived_fails(client, db_session):
+    """
+    BR-301: Archived trainings cannot be unpublished. Must return 400.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+
+    training = _make_published_training(tenant_id, creator.id, is_archived=True)
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/unpublish")
+        assert resp.status_code == 400, f"Expected 400, got {resp.status_code}: {resp.text}"
+        assert "archived" in resp.json()["detail"].lower(), f"Error should mention archived: {resp.json()}"
+    finally:
+        _clear_overrides()
+
+
+# T-UN-06: Full baton flow — unpublish then send-to-draft
+@pytest.mark.asyncio
+async def test_unpublish_then_send_to_draft_baton_flow(client, db_session):
+    """
+    BR-301: Full baton handoff — Manager unpublishes (published → ready),
+    then the owner sends to draft (ready → draft). Both steps must succeed.
+    """
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    manager = _make_manager(tenant_id)
+
+    training = _make_published_training(tenant_id, creator.id)
+    db_session.add(training)
+    await db_session.commit()
+
+    # Step 1: Manager unpublishes → ready
+    _set_user(manager)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/unpublish")
+        assert resp.status_code == 200, f"Unpublish failed: {resp.text}"
+        assert resp.json()["lifecycle_status"] == "ready"
+    finally:
+        _clear_overrides()
+
+    # Step 2: Owner sends to draft → draft
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/send-to-draft")
+        assert resp.status_code == 200, f"Send-to-draft failed: {resp.text}"
+        assert resp.json()["lifecycle_status"] == "draft"
     finally:
         _clear_overrides()
 
