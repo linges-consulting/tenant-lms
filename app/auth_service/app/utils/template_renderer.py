@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from app.core.config import settings
 
 # Initialize Jinja2 environment
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
@@ -20,12 +21,11 @@ class TemplateRenderer:
     @staticmethod
     def get_base_context() -> dict:
         """Get base context variables for all templates."""
+        frontend = settings.FRONTEND_URL.rstrip("/")
         return {
             "current_year": datetime.now().year,
-            "company_website": "https://customlms.com",
-            "help_center": "https://help.customlms.com",
-            "privacy_policy": "https://customlms.com/privacy",
-            "support_email": "support@customlms.com",
+            "frontend_url": frontend,
+            "support_email": "support@cpvmtraining.com",
         }
     
     @staticmethod

@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime
 
 import httpx
 from jinja2 import Environment, FileSystemLoader
@@ -17,12 +18,20 @@ async def send_email(to: str, subject: str, template_name: str, context: dict) -
     if not settings.USE_MAILGUN:
         return True
 
+    # Inject base vars available to every template; caller context takes priority
+    full_context = {
+        "current_year": datetime.utcnow().year,
+        "frontend_url": settings.FRONTEND_URL,
+    }
+    full_context.update(context)
+    context = full_context
+
     recipient = to
-    if settings.ENVIRONMENT == "dev" and settings.MAILGUN_AUTHORIZED_RECIPIENT:
+    if settings.ENVIRONMENT != "prod" and settings.MAILGUN_AUTHORIZED_RECIPIENT:
         recipient = settings.MAILGUN_AUTHORIZED_RECIPIENT
 
     template = _jinja_env.get_template(template_name)
-    html_body = template.render(**context)
+    html_body = template.render(**context)  # noqa: S701 — Jinja2 autoescape not needed for email HTML
 
     async with httpx.AsyncClient(timeout=10) as http_client:
         try:

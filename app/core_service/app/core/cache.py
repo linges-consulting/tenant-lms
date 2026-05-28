@@ -18,7 +18,7 @@ async def get_redis() -> Redis:
         _redis = Redis.from_url(settings.REDIS_URL, decode_responses=False)
     return _redis
 
-def cache_response(key_prefix: str, expire: int = 300, namespace: str = "core", include_user_id: bool = False):
+def cache_response(key_prefix: str, expire: int = settings.CACHE_TTL_SHORT, namespace: str = "core", include_user_id: bool = False):
     """
     Decorator to cache FastAPI endpoint responses in Redis.
     expire: TTL in seconds (default 5 minutes)

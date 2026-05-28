@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 from app.core.cache import cache_response, invalidate_cache
+from app.core.config import settings
 
 from app.api import deps
 from app.models.user import User
@@ -15,7 +16,7 @@ router = APIRouter()
 
 
 @router.get("", response_model=List[GroupOut])
-@cache_response("group_list", expire=600)
+@cache_response("group_list", expire=settings.CACHE_TTL_MEDIUM)
 async def list_groups(
     db: AsyncSession = Depends(deps.get_db),
     current_manager: User = Depends(deps.get_manager_or_creator),

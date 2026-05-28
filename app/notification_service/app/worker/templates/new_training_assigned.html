@@ -1,10 +1,23 @@
-<!DOCTYPE html>
-<html>
-<head><title>New Training Assigned</title></head>
-<body>
-<h2>New Training Assigned</h2>
-<p>You have been assigned: <strong>{{ training_title }}</strong></p>
-{% if due_date %}<p>Due date: {{ due_date }}</p>{% endif %}
-<a href="{{ frontend_url }}/dashboard">Start Training</a>
-</body>
-</html>
+{% extends "base.html" %}
+
+{% block title %}New Training Assigned — CPVMTraining Portal{% endblock %}
+{% block header_title %}New Training Assigned{% endblock %}
+{% block header_subtitle %}A training has been added to your learning plan{% endblock %}
+
+{% block content %}
+<p>Hi there,</p>
+<p>A new training has been assigned to you on the CPVMTraining Portal.</p>
+
+<div class="info-box">
+  <strong>Training:</strong> {{ training_title }}<br>
+  {% if due_date %}<strong>Due date:</strong> {{ due_date }}{% endif %}
+</div>
+
+<div class="btn-wrap">
+  <a href="{{ frontend_url | default('#') }}/dashboard" class="btn">Start Training</a>
+</div>
+
+<p style="font-size: 13px; color: #6b7280; text-align: center;">
+  Log in to your dashboard to begin at your own pace.
+</p>
+{% endblock %}

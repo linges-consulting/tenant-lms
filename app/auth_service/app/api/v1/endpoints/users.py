@@ -1582,7 +1582,7 @@ async def admin_invite_to_tenant(
 
 
 @router.get("/profile/{username}", response_model=UserSchema)
-@cache_response("public_profile", expire=300)
+@cache_response("public_profile", expire=settings.CACHE_TTL_SHORT)
 async def get_user_profile_by_username(
     username: str,
     db: AsyncSession = Depends(deps.get_db),

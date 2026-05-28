@@ -12,6 +12,7 @@ from typing import List, Optional
 
 from app.api import deps
 from app.core.cache import cache_response, invalidate_cache
+from app.core.config import settings
 from app.models.training import Training
 from app.models.module import Module
 from app.models.chapter import Chapter, ContentType
@@ -120,7 +121,7 @@ async def check_training_edit_permission(
     return result.scalar_one_or_none() is not None
 
 @router.get("", response_model=List[TrainingSchema])
-@cache_response("assigned_trainings", expire=300, include_user_id=True)
+@cache_response("assigned_trainings", expire=settings.CACHE_TTL_SHORT, include_user_id=True)
 async def read_trainings(
     db: AsyncSession = Depends(deps.get_db),
     current_user: deps.UserAuth = Depends(deps.get_current_tenant_user),
@@ -444,7 +445,7 @@ async def update_training(
     return training
 
 @router.get("/{training_id}", response_model=TrainingSchema)
-@cache_response("training_detail", expire=300, include_user_id=True)
+@cache_response("training_detail", expire=settings.CACHE_TTL_SHORT, include_user_id=True)
 async def read_training(
     training_id: str,
     db: AsyncSession = Depends(deps.get_db),
@@ -1766,7 +1767,7 @@ async def delete_chapter(
     return None
 
 @router.get("/{training_id}/chapters/{chapter_id}", response_model=ChapterSchema)
-@cache_response("chapter_detail", expire=300)
+@cache_response("chapter_detail", expire=settings.CACHE_TTL_SHORT)
 async def get_chapter(
     training_id: str,
     chapter_id: str,
@@ -1979,7 +1980,7 @@ async def upload_chapter_content(
         raise HTTPException(status_code=500, detail="Failed to process SCORM package. Please try again.")
 
 @router.get("/{training_id}/structure", response_model=TrainingStructure)
-@cache_response("training_structure", expire=300, include_user_id=True)
+@cache_response("training_structure", expire=settings.CACHE_TTL_SHORT, include_user_id=True)
 async def get_training_structure(
     training_id: str,
     db: AsyncSession = Depends(deps.get_db),

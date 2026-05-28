@@ -111,8 +111,13 @@ async def handle_event(db: AsyncSession, event: dict):
             subject="You're invited!",
             template_name="registration_invite.html",
             context={
-                "invite_url": payload.get("invite_url"),
+                "registration_url": payload.get("invite_url"),
+                "full_name": payload.get("full_name", payload.get("email", "")),
+                "token": payload.get("token", ""),
                 "tenant_name": payload.get("tenant_name"),
+                "primary_color": payload.get("primary_color", "#1e3a5f"),
+                "secondary_color": payload.get("secondary_color", "#2d6098"),
+                "logo_url": payload.get("logo_url"),
             },
         )
 

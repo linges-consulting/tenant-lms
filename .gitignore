@@ -52,5 +52,8 @@ skills-lock.json
 # Project-local scratch space (transient command output)
 tmp/
 
+# Generated email preview files
+scripts/email_preview/
+
 # Playwright MCP traces (snapshots, console logs from browser smoke runs)
 .playwright-mcp/

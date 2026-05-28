@@ -1,111 +1,214 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}CustomLMS{% endblock %}</title>
-    <style>
-        :root {
-            --primary-color: {{ primary_color or '#4f46e5' }};
-            --secondary-color: {{ secondary_color or '#7c3aed' }};
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-            line-height: 1.6;
-            color: #1f2937;
-            background-color: #f9fafb;
-            padding: 2.5rem 1rem;
-        }
-        .container {
-            max-width: 600px;
-            margin: 0 auto;
-            background-color: #ffffff;
-            border-radius: 1rem;
-            overflow: hidden;
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-        }
-        .header {
-            background: linear-gradient(135deg, {{ primary_color or '#4f46e5' }} 0%, {{ secondary_color or '#7c3aed' }} 100%);
-            color: white;
-            padding: 3rem 2rem;
-            text-align: center;
-        }
-        .logo-container {
-            margin-bottom: 1.5rem;
-        }
-        .logo-img {
-            max-height: 48px;
-            width: auto;
-        }
-        .header h1 {
-            font-size: 1.75rem;
-            margin-bottom: 0.5rem;
-            font-weight: 800;
-            letter-spacing: -0.025em;
-        }
-        .header p {
-            font-size: 1rem;
-            opacity: 0.9;
-            font-weight: 400;
-        }
-        .content {
-            padding: 3rem 2rem;
-        }
-        .footer {
-            background-color: #f3f4f6;
-            border-top: 1px solid #e5e7eb;
-            padding: 2rem;
-            text-align: center;
-            font-size: 0.8125rem;
-            color: #6b7280;
-        }
-        .cta-button {
-            display: inline-block;
-            background: {{ primary_color or '#4f46e5' }};
-            color: #ffffff !important;
-            text-decoration: none;
-            padding: 0.875rem 2.5rem;
-            border-radius: 0.5rem;
-            font-weight: 600;
-            font-size: 1rem;
-            transition: opacity 0.2s;
-        }
-        .cta-button:hover {
-            opacity: 0.9;
-        }
-        .button-shadow {
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        }
-        .divider {
-            height: 1px;
-            background-color: #e5e7eb;
-            margin: 2rem 0;
-        }
-        {% block extra_style %}{% endblock %}
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}CPVMTraining Portal{% endblock %}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+      background-color: #eef1f5;
+      padding: 32px 16px;
+      color: #1a202c;
+      font-size: 15px;
+      line-height: 1.7;
+    }
+    .wrapper { max-width: 600px; margin: 0 auto; }
+
+    /* ── Pre-header (above card) ─────────────────────────────────────── */
+    .pre-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 4px 16px;
+    }
+    .product-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: {{ primary_color | default('#1e3a5f') }};
+      letter-spacing: 0.03em;
+    }
+    .tenant-area {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .tenant-logo { max-height: 28px; width: auto; display: block; }
+    .tenant-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #4b5563;
+    }
+
+    /* ── Card ────────────────────────────────────────────────────────── */
+    .card {
+      background: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      border: 1px solid #e2e8f0;
+    }
+
+    /* ── Card heading (inside card, replaces coloured header) ───────── */
+    .card-heading {
+      padding: 36px 40px 20px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .card-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: {{ primary_color | default('#1e3a5f') }};
+      margin-bottom: 4px;
+      letter-spacing: -0.2px;
+    }
+    .card-subtitle {
+      font-size: 14px;
+      color: #6b7280;
+    }
+
+    /* ── Card content ────────────────────────────────────────────────── */
+    .content { padding: 32px 40px; }
+    p { margin-bottom: 16px; color: #374151; }
+    p strong { color: #111827; }
+
+    /* ── CTA button ──────────────────────────────────────────────────── */
+    .btn-wrap { text-align: center; margin: 28px 0; }
+    .btn {
+      display: inline-block;
+      background: {{ primary_color | default('#1e3a5f') }};
+      color: #ffffff !important;
+      text-decoration: none;
+      padding: 13px 36px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    /* ── Utility blocks ──────────────────────────────────────────────── */
+    .divider { height: 1px; background: #e5e9ef; margin: 24px 0; }
+    .info-box {
+      background: #f8fafc;
+      border-left: 3px solid {{ primary_color | default('#1e3a5f') }};
+      border-radius: 0 8px 8px 0;
+      padding: 14px 18px;
+      margin: 18px 0;
+      font-size: 14px;
+      color: #4a5568;
+      line-height: 1.8;
+    }
+    .warning-box {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      padding: 13px 16px;
+      margin: 18px 0;
+      font-size: 14px;
+      color: #92400e;
+    }
+    .success-box {
+      background: #f0fdf4;
+      border: 1px solid #86efac;
+      border-radius: 8px;
+      padding: 13px 16px;
+      margin: 18px 0;
+      font-size: 14px;
+      color: #166534;
+    }
+    .danger-box {
+      background: #fef2f2;
+      border: 1px solid #fca5a5;
+      border-radius: 8px;
+      padding: 13px 16px;
+      margin: 18px 0;
+      font-size: 14px;
+      color: #991b1b;
+    }
+    .code-block {
+      background: #f8fafc;
+      border: 1px dashed #cbd5e0;
+      border-radius: 8px;
+      padding: 16px;
+      margin: 18px 0;
+      text-align: center;
+      font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: #1a202c;
+    }
+
+    /* ── Post-footer (below card) ────────────────────────────────────── */
+    .post-footer {
+      text-align: center;
+      padding: 20px 4px 4px;
+    }
+    .footer-links { margin-bottom: 10px; }
+    .footer-links a {
+      color: #6b7280;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 500;
+      margin: 0 8px;
+    }
+    .footer-links a:hover { color: {{ primary_color | default('#1e3a5f') }}; }
+    .footer-text { font-size: 12px; color: #9ca3af; line-height: 1.8; }
+
+    {% block extra_style %}{% endblock %}
+
+    @media (max-width: 600px) {
+      body { padding: 0; background: #fff; }
+      .pre-header { padding: 16px 16px 12px; }
+      .card { border-radius: 0; border-left: none; border-right: none; }
+      .card-heading { padding: 28px 24px 16px; }
+      .content { padding: 24px; }
+      .post-footer { padding: 16px; }
+      .card-title { font-size: 20px; }
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            {% if logo_url %}
-            <div class="logo-container">
-                <img src="{{ logo_url }}" alt="Logo" class="logo-img">
-            </div>
-            {% endif %}
-            <h1>{% block header_title %}CustomLMS{% endblock %}</h1>
-            <p>{% block header_subtitle %}{% endblock %}</p>
-        </div>
-        <div class="content">
-            {% block content %}{% endblock %}
-        </div>
-        <div class="footer">
-            <p>&copy; {{ current_year | default('') }} {{ tenant_name or 'CustomLMS' }}. All rights reserved.</p>
-            <div style="margin-top: 1rem;">
-                <a href="{{ company_website | default('#') }}" style="color: {{ primary_color or '#4f46e5' }}; text-decoration: none;">Website</a> |
-                <a href="{{ help_center | default('#') }}" style="color: {{ primary_color or '#4f46e5' }}; text-decoration: none;">Help Center</a>
-            </div>
-        </div>
+<div class="wrapper">
+
+  <!-- Above card: product name left, tenant right -->
+  <div class="pre-header">
+    <div class="product-name">CPVMTraining Portal</div>
+    <div class="tenant-area">
+      {% if logo_url %}
+        <img src="{{ logo_url }}" alt="{{ tenant_name | default('') }}" class="tenant-logo">
+      {% elif tenant_name %}
+        <span class="tenant-name">{{ tenant_name }}</span>
+      {% endif %}
     </div>
+  </div>
+
+  <!-- Card -->
+  <div class="card">
+    <div class="card-heading">
+      <div class="card-title">{% block header_title %}CPVMTraining Portal{% endblock %}</div>
+      <div class="card-subtitle">{% block header_subtitle %}{% endblock %}</div>
+    </div>
+    <div class="content">
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+
+  <!-- Below card: copyright and links -->
+  <div class="post-footer">
+    <div class="footer-links">
+      {% block footer_links %}
+      <a href="{{ frontend_url | default('#') }}">Portal Home</a>
+      <a href="{{ frontend_url | default('#') }}/dashboard">My Dashboard</a>
+      <a href="mailto:support@cpvmtraining.com">Support</a>
+      {% endblock %}
+    </div>
+    <div class="footer-text">
+      &copy; {{ current_year | default('2026') }} {{ tenant_name | default('CPVMTraining Portal') }}
+      &nbsp;&bull;&nbsp; Powered by CPVMTraining Portal<br>
+      This is an automated message &mdash; please do not reply to this email.
+    </div>
+  </div>
+
+</div>
 </body>
 </html>

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from app.api import deps
 from app.core.cache import cache_response, invalidate_cache
+from app.core.config import settings
 from app.models.training import Training
 from app.models.progress import UserProgress, ProgressStatus
 from app.models.enrollment import Enrollment
@@ -14,7 +15,7 @@ from app.schemas.user_stats import UserStats, UserCertificate
 router = APIRouter()
 
 @router.get("/me/stats", response_model=UserStats)
-@cache_response("user_stats", expire=300, include_user_id=True)
+@cache_response("user_stats", expire=settings.CACHE_TTL_SHORT, include_user_id=True)
 async def get_my_stats(
     db: AsyncSession = Depends(deps.get_db),
     current_user: deps.UserAuth = Depends(deps.get_current_tenant_user),
