@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
@@ -101,6 +101,7 @@ export const ManagerTrainingEditor: React.FC = () => {
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [isUploadingPdf, setIsUploadingPdf] = useState(false);
     const [pdfRemoved, setPdfRemoved] = useState(false);
+    const [scormRemoved, setScormRemoved] = useState(false);
 
     // Quiz Builder State
     const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
@@ -385,8 +386,16 @@ export const ManagerTrainingEditor: React.FC = () => {
                     description: newChapterDescription,
                 };
             } else if (newChapterType === 'SCORM') {
-                // SCORM content_data (index_url, base_path) is filled in by the upload endpoint.
-                contentData = {};
+                // Preserve existing index_url/base_path when editing without re-uploading.
+                // uploadChapterContent will overwrite them if a new file is selected.
+                // If scormRemoved is true, clear the SCORM fields so the chapter has no package.
+                const existingScormChapter = editingChapterId
+                    ? [...(training?.orphan_chapters || []), ...(training?.modules?.flatMap(m => m.chapters || []) || [])].find(c => c.id === editingChapterId)
+                    : null;
+                const baseScormData = scormRemoved
+                    ? { ...existingScormChapter?.content_data, index_url: undefined, base_path: undefined, original_filename: undefined }
+                    : (existingScormChapter?.content_data || {});
+                contentData = { ...baseScormData };
             } else {
                 contentData = {
                     [newChapterType === 'VIDEO' ? 'url' : 'text']: newChapterContent,
@@ -435,6 +444,7 @@ export const ManagerTrainingEditor: React.FC = () => {
             setNewChapterContent('');
             setNewChapterDescription('');
             setScormFile(null);
+            setScormRemoved(false);
             setPdfFile(null);
             setPdfRemoved(false);
             setQuizQuestions([]);
@@ -464,25 +474,24 @@ export const ManagerTrainingEditor: React.FC = () => {
         if (direction === 'down' && index === modules.length - 1) return;
 
         const newIndex = direction === 'up' ? index - 1 : index + 1;
-        const currentMod = modules[index];
-        const otherMod = modules[newIndex];
-        
-        const tempOrder = currentMod.sequence_order;
-        currentMod.sequence_order = otherMod.sequence_order;
-        otherMod.sequence_order = tempOrder;
+        const temp = modules[index].sequence_order;
+        modules[index] = { ...modules[index], sequence_order: modules[newIndex].sequence_order };
+        modules[newIndex] = { ...modules[newIndex], sequence_order: temp };
+
+        const previousTraining = training;
+        setTraining({ ...training, modules });
 
         try {
             await managerTrainingsApi.reorderModules(id, modules.map(m => ({ id: m.id, sequence_order: m.sequence_order })));
-            await fetchStructure();
         } catch (error) {
             console.error('Failed to reorder modules:', error);
+            setTraining(previousTraining);
         }
     };
 
     const handleReorderChapters = async (moduleId: string | undefined, chapterId: string, direction: 'up' | 'down') => {
         if (!training || !id) return;
-        
-        // Find the collection to reorder (module chapters or orphan chapters)
+
         let chapters: Chapter[] = [];
         if (moduleId) {
             const mod = training.modules.find(m => m.id === moduleId);
@@ -499,18 +508,21 @@ export const ManagerTrainingEditor: React.FC = () => {
         if (direction === 'down' && index === chapters.length - 1) return;
 
         const newIndex = direction === 'up' ? index - 1 : index + 1;
-        const currentChap = chapters[index];
-        const otherChap = chapters[newIndex];
-        
-        const tempOrder = currentChap.sequence_order;
-        currentChap.sequence_order = otherChap.sequence_order;
-        otherChap.sequence_order = tempOrder;
+        const temp = chapters[index].sequence_order;
+        chapters[index] = { ...chapters[index], sequence_order: chapters[newIndex].sequence_order };
+        chapters[newIndex] = { ...chapters[newIndex], sequence_order: temp };
+
+        const previousTraining = training;
+        const updatedTraining: TrainingStructure = moduleId
+            ? { ...training, modules: training.modules.map(m => m.id === moduleId ? { ...m, chapters } : m) }
+            : { ...training, orphan_chapters: chapters };
+        setTraining(updatedTraining);
 
         try {
             await managerTrainingsApi.reorderChapters(id, moduleId, chapters.map(c => ({ id: c.id, sequence_order: c.sequence_order })));
-            await fetchStructure();
         } catch (error) {
             console.error('Failed to reorder chapters:', error);
+            setTraining(previousTraining);
         }
     };
 
@@ -588,6 +600,7 @@ export const ManagerTrainingEditor: React.FC = () => {
         setNewChapterType('VIDEO');
         setChapterSaveAttempted(false);
         setPdfRemoved(false);
+        setScormRemoved(false);
     };
 
     const buildDefaultOptions = (count = 2): QuizOption[] =>
@@ -795,6 +808,32 @@ export const ManagerTrainingEditor: React.FC = () => {
         return () => observer.disconnect();
     }, [previewModalOpen]);
 
+    // Inject a no-op SCORM 1.2 API stub so the preview iframe can call window.parent.API.
+    // useLayoutEffect fires before paint so the API is available before the iframe's JS runs.
+    useLayoutEffect(() => {
+        if (newChapterType !== 'SCORM') {
+            delete (window as Window & { API?: unknown }).API;
+            return;
+        }
+        (window as Window & { API?: unknown }).API = {
+            LMSInitialize: () => 'true',
+            LMSFinish: () => 'true',
+            LMSSetValue: () => 'true',
+            LMSGetValue: (element: string) => {
+                if (element === 'cmi.core.lesson_status') return 'not attempted';
+                if (element === 'cmi.core.entry') return 'ab-initio';
+                return '';
+            },
+            LMSGetLastError: () => '0',
+            LMSGetErrorString: () => '',
+            LMSGetDiagnostic: () => '',
+            LMSCommit: () => 'true',
+        };
+        return () => {
+            delete (window as Window & { API?: unknown }).API;
+        };
+    }, [newChapterType]);
+
     const openPreview = () => {
         const template = templates.find(t => t.id === templateId);
         if (template) {
@@ -915,18 +954,61 @@ export const ManagerTrainingEditor: React.FC = () => {
                 )}
 
                 {newChapterType === 'SCORM' && (
-                    <div className="space-y-2">
-                        <Label className="text-secondary-foreground">SCORM Package (ZIP)</Label>
-                        <div className={cn('flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-lg cursor-pointer transition-colors', scormFile ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50 hover:bg-muted/30')}>
-                            <label className="flex flex-col items-center justify-center w-full h-full cursor-pointer">
-                                <Upload className="w-8 h-8 mb-2 text-muted-foreground" />
-                                {scormFile ? (
-                                    <span className="text-sm font-medium text-primary">{scormFile.name}</span>
-                                ) : (
-                                    <span className="text-sm text-muted-foreground">Click to upload SCORM zip</span>
-                                )}
-                                <input type="file" accept=".zip" className="hidden" onChange={e => setScormFile(e.target.files?.[0] ?? null)} />
-                            </label>
+                    <div className="space-y-4">
+                        <div className="space-y-2">
+                            <Label className="text-secondary-foreground">SCORM Package (ZIP)</Label>
+                            {(() => {
+                                const existingScormUrl = editingChapterId
+                                    ? ([...(training?.orphan_chapters || []), ...(training?.modules?.flatMap(m => m.chapters || []) || [])].find(c => c.id === editingChapterId)?.content_data?.index_url as string | undefined)
+                                    : undefined;
+                                if (editingChapterId && existingScormUrl && !scormFile && !scormRemoved) {
+                                    return (
+                                        <div className="mb-2">
+                                            <p className="text-xs text-muted-foreground mb-1">Current SCORM Package:</p>
+                                            <iframe src={existingScormUrl} className="w-full h-48 border rounded" title="Current SCORM Package" />
+                                            <div className="flex gap-2 mt-1">
+                                                <Button variant="outline" size="sm" onClick={() => document.getElementById('scorm-replace-input')?.click()}>Replace</Button>
+                                                <Button variant="outline" size="sm" onClick={() => setScormRemoved(true)}>Remove</Button>
+                                            </div>
+                                        </div>
+                                    );
+                                }
+                                if (scormRemoved) {
+                                    return (
+                                        <div className="mb-2 flex items-center gap-3 p-3 rounded-md border border-border bg-muted/20">
+                                            <Upload className="w-5 h-5 text-muted-foreground shrink-0" />
+                                            <span className="text-sm text-muted-foreground flex-1">No SCORM package</span>
+                                            <Button variant="ghost" size="sm" className="text-xs" onClick={() => setScormRemoved(false)}>Undo</Button>
+                                        </div>
+                                    );
+                                }
+                                return null;
+                            })()}
+                            <input
+                                id="scorm-replace-input"
+                                type="file"
+                                accept=".zip"
+                                className="hidden"
+                                onChange={e => { setScormFile(e.target.files?.[0] ?? null); setScormRemoved(false); }}
+                            />
+                            {!scormRemoved && (
+                                <div className={cn('flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-lg cursor-pointer transition-colors', scormFile ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50 hover:bg-muted/30')}>
+                                    <label className="flex flex-col items-center justify-center w-full h-full cursor-pointer">
+                                        <Upload className="w-8 h-8 mb-2 text-muted-foreground" />
+                                        {scormFile ? (
+                                            <span className="text-sm font-medium text-primary">{scormFile.name}</span>
+                                        ) : editingChapterId ? (
+                                            <span className="text-sm text-muted-foreground">Click to replace the SCORM zip</span>
+                                        ) : (
+                                            <span className="text-sm text-muted-foreground">Click to upload SCORM zip</span>
+                                        )}
+                                        <input type="file" accept=".zip" className="hidden" onChange={e => { setScormFile(e.target.files?.[0] ?? null); setScormRemoved(false); }} />
+                                    </label>
+                                </div>
+                            )}
+                            <p className="text-[11px] text-muted-foreground">
+                                Upload a SCORM 1.2 or 2004 zip package. The package launches in an embedded player for learners.
+                            </p>
                         </div>
                     </div>
                 )}
@@ -1600,7 +1682,7 @@ export const ManagerTrainingEditor: React.FC = () => {
 
                                                                         {/* Index */}
                                                                         <span className="text-[10px] font-mono text-muted-foreground/50 w-6 shrink-0 text-right">
-                                                                            {module.sequence_order}.{chapter.sequence_order}
+                                                                            {module.sequence_order}.{cIdx + 1}
                                                                         </span>
 
                                                                         {/* Type icon */}

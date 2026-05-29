@@ -227,6 +227,33 @@ async def remove_group_member(
     await invalidate_cache("group_list", tenant_id)
 
 
+@router.post("/internal/members", response_model=dict)
+async def get_group_members_batch(
+    group_ids: List[str],
+    db: AsyncSession = Depends(deps.get_db),
+    x_internal_api_key: Optional[str] = Header(None, alias="X-Internal-Api-Key"),
+):
+    """
+    INTERNAL ONLY: Return user_ids for each group in the supplied list.
+    Returns { group_id: [user_id, ...] }.
+    """
+    if x_internal_api_key != settings.INTERNAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing internal API key")
+
+    if not group_ids:
+        return {}
+
+    result = await db.execute(
+        select(GroupMembership.group_id, GroupMembership.user_id).where(
+            GroupMembership.group_id.in_(group_ids)
+        )
+    )
+    members: dict[str, list[str]] = {}
+    for group_id, user_id in result.all():
+        members.setdefault(group_id, []).append(user_id)
+    return members
+
+
 @router.post("/internal/batch", response_model=dict)
 async def get_groups_batch(
     group_ids: List[str],

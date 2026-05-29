@@ -9,6 +9,7 @@ import { Input } from '../components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { PageLoader } from '../components/ui/PageLoader';
 import { AlertCircle, BarChart3, Download, FileText } from 'lucide-react';
+import { toast } from 'sonner';
 import { cn } from '../lib/utils';
 
 type StatusFilter = 'all' | 'published' | 'draft';
@@ -45,8 +46,18 @@ export function ManagerAnalytics() {
     });
   }, [trainings, search, status, creator, category]);
 
-  const handleDownload = (format: 'pdf' | 'csv') => {
-    window.open(analyticsApi.getListReportUrl(format), '_blank');
+  const handleDownload = async (format: 'pdf' | 'csv') => {
+    try {
+      const blob = await analyticsApi.downloadListReport(format);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `training-analytics.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Failed to download report');
+    }
   };
 
   if (isLoading) return <PageLoader />;

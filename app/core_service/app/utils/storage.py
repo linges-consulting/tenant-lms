@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 SCORM_ROOT = Path("/mnt/scorm")
+IMAGES_ROOT = Path("/mnt/images")
 
 def save_upload_file(upload_file, destination: Path) -> None:
     try:
@@ -62,6 +63,18 @@ def save_banner_image(upload_file, tenant_id: str, training_id: str, ext: str) -
     dest = banner_dir / f"{training_id}{ext}"
     save_upload_file(upload_file, dest)
     return f"/storage/banners/{tenant_id}/{training_id}{ext}"
+
+
+def delete_chapter_files(content_type: str, tenant_id: str, training_id: str, chapter_id: str) -> None:
+    """Remove uploaded files for a chapter. Silent no-op if files don't exist."""
+    ct = (content_type or "").upper()
+    if "SCORM" in ct:
+        scorm_dir = SCORM_ROOT / tenant_id / training_id / chapter_id
+        if scorm_dir.exists():
+            shutil.rmtree(scorm_dir, ignore_errors=True)
+    elif "PDF" in ct:
+        pdf_file = IMAGES_ROOT / "pdfs" / tenant_id / training_id / f"{chapter_id}.pdf"
+        pdf_file.unlink(missing_ok=True)
 
 
 def save_pdf_file(upload_file, tenant_id: str, training_id: str, chapter_id: str) -> str:

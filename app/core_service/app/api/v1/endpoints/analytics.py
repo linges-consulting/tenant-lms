@@ -48,17 +48,47 @@ async def analytics_training_list(
 
     training_ids = [t.id for t in trainings]
 
-    enrolled_q = await db.execute(
-        select(TrainingAssignment.training_id, func.count(TrainingAssignment.id))
-        .where(
+    # Build enrolled user sets per training by unioning two sources:
+    # 1. Direct user assignments (TrainingAssignment.user_id) — covers assignments
+    #    made via the core-service bulk endpoint which doesn't create Enrollment rows.
+    # 2. Enrollment records — covers group fan-out created by the auth-service path.
+    # Deduplicating in Python ensures a user assigned both ways counts once.
+    enrolled_user_sets: dict[str, set[str]] = defaultdict(set)
+
+    direct_asgn_rows = await db.execute(
+        select(TrainingAssignment.training_id, TrainingAssignment.user_id).where(
             TrainingAssignment.tenant_id == tenant_id,
             TrainingAssignment.training_id.in_(training_ids),
             TrainingAssignment.deleted_at.is_(None),
             TrainingAssignment.user_id.isnot(None),
         )
-        .group_by(TrainingAssignment.training_id)
     )
-    enrolled_map: dict[str, int] = {row[0]: row[1] for row in enrolled_q.all()}
+    for tid, uid in direct_asgn_rows.all():
+        enrolled_user_sets[tid].add(uid)
+
+    enroll_rows = await db.execute(
+        select(Enrollment.training_id, Enrollment.user_id).where(
+            Enrollment.tenant_id == tenant_id,
+            Enrollment.training_id.in_(training_ids),
+        )
+    )
+    for tid, uid in enroll_rows.all():
+        enrolled_user_sets[tid].add(uid)
+
+    # 3. UserProgress — catches group-assigned users who have started the training
+    #    even when no Enrollment record exists (core-service group assignments don't
+    #    fan out Enrollment rows).
+    progress_rows = await db.execute(
+        select(UserProgress.training_id, UserProgress.user_id).where(
+            UserProgress.tenant_id == tenant_id,
+            UserProgress.training_id.in_(training_ids),
+            UserProgress.deleted_at.is_(None),
+        ).distinct()
+    )
+    for tid, uid in progress_rows.all():
+        enrolled_user_sets[tid].add(uid)
+
+    enrolled_map: dict[str, int] = {tid: len(uids) for tid, uids in enrolled_user_sets.items()}
 
     completed_q = await db.execute(
         select(Enrollment.training_id, func.count(Enrollment.id))
@@ -71,27 +101,34 @@ async def analytics_training_list(
     )
     completed_map: dict[str, int] = {row[0]: row[1] for row in completed_q.all()}
 
-    overdue_q = await db.execute(
-        select(TrainingAssignment.training_id, func.count(TrainingAssignment.id))
-        .where(
+    # Overdue: enrolled users (from any assignment type) who have not completed
+    # and whose training has a past-due assignment record (user-level or group-level).
+    # We count enrolled-but-incomplete users for trainings that have at least one
+    # past-due assignment, covering both direct and group assignment due dates.
+    overdue_training_ids_q = await db.execute(
+        select(func.distinct(TrainingAssignment.training_id)).where(
             TrainingAssignment.tenant_id == tenant_id,
             TrainingAssignment.training_id.in_(training_ids),
             TrainingAssignment.deleted_at.is_(None),
-            TrainingAssignment.user_id.isnot(None),
             TrainingAssignment.due_date.isnot(None),
             TrainingAssignment.due_date < now,
-            ~exists(
-                select(Enrollment.id).where(
-                    Enrollment.tenant_id == tenant_id,
-                    Enrollment.training_id == TrainingAssignment.training_id,
-                    Enrollment.user_id == TrainingAssignment.user_id,
-                    Enrollment.is_completed.is_(True),
-                )
-            ),
         )
-        .group_by(TrainingAssignment.training_id)
     )
-    overdue_map: dict[str, int] = {row[0]: row[1] for row in overdue_q.all()}
+    overdue_training_ids = {row[0] for row in overdue_training_ids_q.all()}
+
+    overdue_map: dict[str, int] = defaultdict(int)
+    if overdue_training_ids:
+        overdue_enrolled_q = await db.execute(
+            select(Enrollment.training_id, func.count(func.distinct(Enrollment.user_id)))
+            .where(
+                Enrollment.tenant_id == tenant_id,
+                Enrollment.training_id.in_(list(overdue_training_ids)),
+                Enrollment.is_completed.is_(False),
+            )
+            .group_by(Enrollment.training_id)
+        )
+        for row in overdue_enrolled_q.all():
+            overdue_map[row[0]] = row[1]
 
     quiz_chapters_q = await db.execute(
         select(Chapter).where(
@@ -168,21 +205,32 @@ async def analytics_training_detail(
     if not training or training.tenant_id != tenant_id or training.deleted_at:
         raise HTTPException(status_code=404, detail="Training not found")
 
-    asgn_q = await db.execute(
+    # Fetch all assignment records — both direct (user_id) and group-based (group_id).
+    all_asgn_q = await db.execute(
         select(TrainingAssignment).where(
             TrainingAssignment.tenant_id == tenant_id,
             TrainingAssignment.training_id == training_id,
             TrainingAssignment.deleted_at.is_(None),
-            TrainingAssignment.user_id.isnot(None),
         )
     )
-    assignments = asgn_q.scalars().all()
-    user_ids = list({a.user_id for a in assignments})
-    enrolled_count = len(assignments)
+    all_assignments = all_asgn_q.scalars().all()
+    direct_assignments = [a for a in all_assignments if a.user_id]
+    group_assignments = [a for a in all_assignments if a.group_id]
 
-    if not assignments:
-        return _empty_detail(training, enrolled_count)
+    # Resolve group members so their due_dates can be inferred from the group assignment.
+    group_ids = [a.group_id for a in group_assignments]
+    group_members_map: dict[str, list[str]] = await deps.get_group_members_batch(group_ids)
 
+    # Build user_id → due_date: group assignment applies to its members;
+    # direct assignment overrides if the same user also has one.
+    user_due_date: dict[str, Optional[datetime]] = {}
+    for a in group_assignments:
+        for uid in group_members_map.get(a.group_id or "", []):
+            user_due_date[uid] = a.due_date
+    for a in direct_assignments:
+        user_due_date[a.user_id] = a.due_date  # direct always wins
+
+    # Enrolled users come from Enrollment records — already fanned out for groups.
     enroll_q = await db.execute(
         select(Enrollment).where(
             Enrollment.tenant_id == tenant_id,
@@ -190,6 +238,17 @@ async def analytics_training_detail(
         )
     )
     enrollments = {e.user_id: e for e in enroll_q.scalars().all()}
+
+    # Union of direct-assigned users + group members + enrolled users (covers all cases).
+    user_ids = list({
+        *[a.user_id for a in direct_assignments],
+        *[uid for gid, uids in group_members_map.items() for uid in uids],
+        *list(enrollments.keys()),
+    })
+    enrolled_count = len(set(user_ids))
+
+    if not user_ids:
+        return _empty_detail(training, 0)
 
     ch_q = await db.execute(
         select(Chapter).where(
@@ -264,29 +323,31 @@ async def analytics_training_detail(
             "locked_count": len(locked_users),
         })
 
-    assignment_map = {a.user_id: a for a in assignments}
     completed_count = sum(1 for e in enrollments.values() if e.is_completed)
 
-    def _is_overdue(a: TrainingAssignment) -> bool:
-        if not a.due_date:
+    def _due_date_for(uid: str) -> Optional[datetime]:
+        d = user_due_date.get(uid)
+        if d is None:
+            return None
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+    def _is_overdue_uid(uid: str) -> bool:
+        due = _due_date_for(uid)
+        if not due:
             return False
-        due = a.due_date if a.due_date.tzinfo else a.due_date.replace(tzinfo=timezone.utc)
-        enroll = enrollments.get(a.user_id)
+        enroll = enrollments.get(uid)
         return due < now and not (enroll and enroll.is_completed)
 
-    overdue_count = sum(1 for a in assignments if _is_overdue(a))
+    overdue_count = sum(1 for uid in user_ids if _is_overdue_uid(uid))
 
     def _due_soon(days: int) -> int:
         cutoff = now + timedelta(days=days)
-        count = 0
-        for a in assignments:
-            if not a.due_date:
-                continue
-            due = a.due_date if a.due_date.tzinfo else a.due_date.replace(tzinfo=timezone.utc)
-            enroll = enrollments.get(a.user_id)
-            if now <= due <= cutoff and not (enroll and enroll.is_completed):
-                count += 1
-        return count
+        return sum(
+            1 for uid in user_ids
+            if (due := _due_date_for(uid))
+            and now <= due <= cutoff
+            and not (enrollments.get(uid) and enrollments[uid].is_completed)
+        )
 
     lockout_count = sum(
         1 for uid in user_ids
@@ -307,7 +368,7 @@ async def analytics_training_detail(
     )
     users_with_progress = {row[0] for row in prog_q.all()}
 
-    def _employee_status(uid: str, asgn: TrainingAssignment) -> str:
+    def _employee_status(uid: str) -> str:
         enroll = enrollments.get(uid)
         if enroll and enroll.is_completed:
             return "completed"
@@ -317,7 +378,7 @@ async def analytics_training_detail(
         )
         if locked:
             return "locked"
-        if _is_overdue(asgn):
+        if _is_overdue_uid(uid):
             return "overdue"
         if uid in users_with_progress:
             return "in_progress"
@@ -325,9 +386,9 @@ async def analytics_training_detail(
 
     employees = []
     for uid in user_ids:
-        asgn = assignment_map[uid]
         uinfo = users_data.get(uid, {})
         enroll = enrollments.get(uid)
+        due = user_due_date.get(uid)
         locked_count = sum(
             1 for info in user_quiz_summary.get(uid, {}).values()
             if info["max_attempts"] and info["attempt_count"] >= info["max_attempts"] and not info["passed"]
@@ -337,8 +398,8 @@ async def analytics_training_detail(
             "username": uinfo.get("username", ""),
             "full_name": uinfo.get("full_name", ""),
             "email": uinfo.get("email", ""),
-            "status": _employee_status(uid, asgn),
-            "due_date": asgn.due_date.isoformat() if asgn.due_date else None,
+            "status": _employee_status(uid),
+            "due_date": due.isoformat() if due else None,
             "completed_at": enroll.completed_at.isoformat() if enroll and enroll.completed_at else None,
             "locked_quiz_count": locked_count,
             "quiz_attempts": [

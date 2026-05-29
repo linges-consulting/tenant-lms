@@ -47,6 +47,7 @@ import {
 } from "../components/ui/alert-dialog";
 import { ManageEditorsModal } from '../components/ManageEditorsModal';
 import type { Training } from '../api/trainings';
+import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/auth-context';
 import { toast } from 'sonner';
 
@@ -430,9 +431,28 @@ export const ManagerTrainings: React.FC = () => {
                         </TableHeader>
                         <TableBody>
                             {filteredTrainings.map((training) => (
-                                <TableRow key={training.id} className="hover:bg-muted/30 transition-colors group">
+                                <TableRow
+                                    key={training.id}
+                                    className={cn(
+                                        'transition-colors group',
+                                        training.is_published
+                                            ? 'bg-muted/30 opacity-60 hover:opacity-80'
+                                            : 'hover:bg-muted/30',
+                                    )}
+                                >
                                     <TableCell className="pl-4 w-[50px]">
-                                        {hasDropdownActions(training) && (
+                                        {training.is_published ? (
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                                                disabled={cloningId === training.id}
+                                                onClick={() => handleCloneTraining(training)}
+                                            >
+                                                <Copy className="h-3.5 w-3.5 mr-1" />
+                                                {cloningId === training.id ? 'Cloning…' : 'Clone'}
+                                            </Button>
+                                        ) : hasDropdownActions(training) && (
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
                                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary">
@@ -513,7 +533,15 @@ export const ManagerTrainings: React.FC = () => {
                                             <div className="w-10 h-10 rounded bg-muted flex items-center justify-center text-muted-foreground">
                                                 <FileText className="w-5 h-5" />
                                             </div>
-                                            <span className="group-hover:text-primary transition-colors cursor-pointer" onClick={() => navigate(`/manage/courses/${training.id}`)}>
+                                            <span
+                                                className={cn(
+                                                    'transition-colors',
+                                                    training.is_published
+                                                        ? 'text-muted-foreground'
+                                                        : 'group-hover:text-primary cursor-pointer',
+                                                )}
+                                                onClick={training.is_published ? undefined : () => navigate(`/manage/courses/${training.id}`)}
+                                            >
                                                 {training.title}
                                             </span>
                                         </div>

@@ -171,8 +171,19 @@ export function ManagerAnalyticsDetail() {
     }
   };
 
-  const handleDownload = (format: 'pdf' | 'csv') => {
-    if (trainingId) window.open(analyticsApi.getDetailReportUrl(trainingId, format), '_blank');
+  const handleDownload = async (format: 'pdf' | 'csv') => {
+    if (!trainingId) return;
+    try {
+      const blob = await analyticsApi.downloadDetailReport(trainingId, format);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `training-analytics.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('Failed to download report');
+    }
   };
 
   if (isLoading) return <PageLoader />;

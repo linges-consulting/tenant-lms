@@ -448,10 +448,22 @@ export const TrainingViewer: React.FC = () => {
             return;
         }
 
-        const submission: QuizAnswer[] = (activeChapter.content_data.questions as Question[]).map((q) => ({
-            question_id: q.id,
-            selected_option_ids: selectedAnswers[q.id] || []
-        }));
+        const submission: QuizAnswer[] = (activeChapter.content_data.questions as Question[]).map((q) => {
+            const raw = selectedAnswers[q.id] || [];
+            if (q.type === 'ordering') {
+                return { question_id: q.id, selected_option_ids: [], ordered_ids: raw };
+            }
+            if (q.type === 'matching') {
+                const pairs = raw
+                    .map((p: string) => {
+                        const [left, right] = p.split('::');
+                        return left && right ? { [left]: right } : null;
+                    })
+                    .filter(Boolean) as Record<string, string>[];
+                return { question_id: q.id, selected_option_ids: [], pairs };
+            }
+            return { question_id: q.id, selected_option_ids: raw };
+        });
 
         setQuizSubmitting(true);
         try {
@@ -805,7 +817,7 @@ export const TrainingViewer: React.FC = () => {
                         ) : (
                             <div className="grid grid-cols-1 gap-3">
                                 {(currentQ.options as { id: string; text: string }[] | undefined)?.map((opt, oIdx) => {
-                                    const isMultiple = (currentQ.correct_option_ids?.length || 0) > 1 || (currentQ.correct_option_id === undefined && currentQ.correct_option_ids === undefined);
+                                    const isMultiple = currentQ.type === 'multiple_select' || (currentQ.correct_option_ids?.length || 0) > 1;
                                     const isSelected = selectedAnswers[currentQ.id]?.includes(opt.id);
 
                                     return (

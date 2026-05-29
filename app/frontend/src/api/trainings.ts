@@ -111,6 +111,8 @@ export interface Certificate {
 export interface QuizAnswer {
     question_id: string;
     selected_option_ids: string[];
+    ordered_ids?: string[];
+    pairs?: Record<string, string>[];
 }
 
 export interface QuizSubmission {

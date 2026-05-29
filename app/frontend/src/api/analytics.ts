@@ -100,9 +100,9 @@ export const analyticsApi = {
   getProfileHistory: (userId: string) =>
     client.get<ProfileTrainingItem[]>(`/analytics/profile/${userId}`),
 
-  getListReportUrl: (format: 'pdf' | 'csv') =>
-    `/api/v1/analytics/report?format=${format}`,
+  downloadListReport: (format: 'pdf' | 'csv') =>
+    client.getBlob(`/analytics/report?format=${format}`),
 
-  getDetailReportUrl: (trainingId: string, format: 'pdf' | 'csv') =>
-    `/api/v1/analytics/trainings/${trainingId}/report?format=${format}`,
+  downloadDetailReport: (trainingId: string, format: 'pdf' | 'csv') =>
+    client.getBlob(`/analytics/trainings/${trainingId}/report?format=${format}`),
 };

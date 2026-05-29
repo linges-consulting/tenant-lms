@@ -790,7 +790,8 @@ async def bulk_assign_training(
         raise HTTPException(status_code=400, detail="Training must be published or ready before assigning.")
 
     assignments_to_add = []
-    
+    enrollments_to_add = []
+
     # Process user assignments
     for user_id in bulk_data.user_ids:
         # Check if already assigned
@@ -811,7 +812,27 @@ async def bulk_assign_training(
                     due_date=bulk_data.due_date
                 )
             )
-            
+
+            # Create Enrollment so analytics, progress tracking, and
+            # completion checks can find this user without an auth-service call.
+            existing_enroll = await db.execute(
+                select(Enrollment).where(
+                    Enrollment.training_id == training_id,
+                    Enrollment.user_id == user_id,
+                    Enrollment.tenant_id == tenant_id,
+                )
+            )
+            if not existing_enroll.scalar_one_or_none():
+                enrollments_to_add.append(
+                    Enrollment(
+                        id=str(uuid.uuid4()),
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        training_id=training_id,
+                        training_version_id=training.version,
+                    )
+                )
+
             # Publish NEW_TRAINING_ASSIGNED event
             from app.core.events import publisher
             await publisher.publish_event(
@@ -847,6 +868,8 @@ async def bulk_assign_training(
 
     if assignments_to_add:
         db.add_all(assignments_to_add)
+        if enrollments_to_add:
+            db.add_all(enrollments_to_add)
         await db.commit()
         
         # Invalidate assigned trainings for affected users/groups
@@ -1749,7 +1772,20 @@ async def reorder_chapters(
     if not await check_training_edit_permission(training, current_user, db):
         raise HTTPException(status_code=403, detail="Training must be in Draft state to edit content.")
 
-    # Bulk update sequence orders
+    # Two-phase update to avoid violating the partial unique index
+    # uq_chapters_training_seq_live on (training_id, sequence_order).
+    # A direct swap would create a transient duplicate within the same training,
+    # which Postgres rejects at statement-end. Phase 1 moves chapters to
+    # unreachable temporary values; phase 2 sets the final values.
+    TEMP_OFFSET = 1_000_000
+    for item in reorder_in.items:
+        await db.execute(
+            Chapter.__table__.update()
+            .where(Chapter.id == item.id)
+            .where(Chapter.module_id == module_id)
+            .where(Chapter.training_id == training_id)
+            .values(sequence_order=item.sequence_order + TEMP_OFFSET)
+        )
     for item in reorder_in.items:
         await db.execute(
             Chapter.__table__.update()
@@ -1865,14 +1901,18 @@ async def delete_module(
     if not db_item:
         raise HTTPException(status_code=404, detail="Module not found")
 
-    # Also delete associated chapters or let cascade handle it? 
-    # Usually we should delete chapters associated with this module in this training.
-    # The DB model might have cascade, but let's be explicit if needed or trust DB.
-    
+    # Fetch chapters before deletion so we can clean up their files after commit.
+    chap_result = await db.execute(
+        select(Chapter).where(Chapter.module_id == module_id, Chapter.training_id == training_id)
+    )
+    module_chapters = chap_result.scalars().all()
+
     await db.delete(db_item)
     await log_audit(db, tenant_id, current_user.id, "DELETE_MODULE", "module", module_id, {"training_id": training_id, "title": db_item.title})
     await db.commit()
-    
+
+    for ch in module_chapters:
+        storage.delete_chapter_files(str(ch.content_type or ""), tenant_id, training_id, ch.id)
     await invalidate_cache("training_structure", tenant_id)
     return None
 
@@ -2003,10 +2043,12 @@ async def delete_chapter(
     if not db_item:
         raise HTTPException(status_code=404, detail="Chapter not found")
 
+    content_type = str(db_item.content_type or "")
     await db.delete(db_item)
     await log_audit(db, tenant_id, current_user.id, "DELETE_CHAPTER", "chapter", chapter_id, {"training_id": training_id, "title": db_item.title})
     await db.commit()
-    
+
+    storage.delete_chapter_files(content_type, tenant_id, training_id, chapter_id)
     await invalidate_cache("training_structure", tenant_id)
     return None
 
@@ -2184,7 +2226,8 @@ async def upload_chapter_content(
     if file.content_type not in ALLOWED_SCORM_MIME_TYPES:
         raise HTTPException(status_code=400, detail="Invalid file type. Only ZIP files are accepted for SCORM packages.")
 
-    # 2. Prepare storage path
+    # 2. Prepare storage path — clear existing content first so stale files don't accumulate
+    storage.delete_chapter_files("SCORM", tenant_id, training_id, chapter_id)
     storage_path = storage.prepare_storage_path(tenant_id, training_id, chapter_id)
     zip_path = storage_path / f"content_{uuid.uuid4()}.zip"
 
@@ -2426,8 +2469,19 @@ async def complete_chapter(
             detail="Training has expired and cannot be continued."
         )
 
-    # 1.6. Progress Locking: Removed to allow review of completed content
-    # (Individual chapter idempotency is handled below)
+    # 1.6. Idempotency: if already completed, return early — no gating needed.
+    # Quiz chapters are completed by submit_quiz; calling /complete again (e.g.
+    # via "Proceed to Next Lesson") must not re-run the gating check.
+    early_prog = await db.execute(
+        select(UserProgress).where(
+            UserProgress.user_id == current_user.id,
+            UserProgress.chapter_id == chapter_id,
+            UserProgress.deleted_at.is_(None),
+        )
+    )
+    early_prog = early_prog.scalar_one_or_none()
+    if early_prog and early_prog.status == ProgressStatus.COMPLETED:
+        return {"status": "already_completed"}
 
     # 2. Sequential Validation (Gating)
     if chapter.sequence_order > 1:
@@ -2473,8 +2527,6 @@ async def complete_chapter(
     prog = prog.scalar_one_or_none()
 
     if prog:
-        if prog.status == ProgressStatus.COMPLETED:
-            return {"status": "already_completed"}
         prog.status = ProgressStatus.COMPLETED
         prog.completed_at = datetime.now(timezone.utc)
     else:
@@ -2837,9 +2889,18 @@ async def submit_quiz(
         elif q_type in ("multiple_choice", "multiple_select", "true_false"):
             is_correct = sorted(user_answer.selected_option_ids) == sorted(correct_ids)
         elif q_type == "ordering":
-            is_correct = user_answer.ordered_ids == correct_ids
+            is_correct = (user_answer.ordered_ids or []) == correct_ids
         elif q_type == "matching":
-            correct_pairs = set(tuple(sorted(p.items())) for p in question.get("correct_pairs", []))
+            # correct_pairs may be stored as a list of dicts, or as correct_option_ids
+            # with "leftId::rightId" strings (the editor's storage format).
+            raw_correct = question.get("correct_pairs", [])
+            if not raw_correct:
+                raw_correct = [
+                    {parts[0]: parts[1]}
+                    for entry in question.get("correct_option_ids", [])
+                    if "::" in entry and len((parts := entry.split("::", 1))) == 2
+                ]
+            correct_pairs = set(tuple(sorted(p.items())) for p in raw_correct)
             user_pairs = set(tuple(sorted(p.items())) for p in (user_answer.pairs or []))
             is_correct = user_pairs == correct_pairs
         else:

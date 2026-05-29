@@ -68,6 +68,7 @@ export const ManagerPublishTrainings: React.FC = () => {
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('ready');
     const [actionInProgress, setActionInProgress] = useState<string | null>(null);
     const [previewTraining, setPreviewTraining] = useState<Training | null>(null);
+    const [publishTarget, setPublishTarget] = useState<Training | null>(null);
     const [unpublishTarget, setUnpublishTarget] = useState<Training | null>(null);
     const [unpublishCompletionCount, setUnpublishCompletionCount] = useState(0);
     const [unpublishAssignedCount, setUnpublishAssignedCount] = useState(0);
@@ -89,7 +90,8 @@ export const ManagerPublishTrainings: React.FC = () => {
         fetchTrainings();
     }, []);
 
-    const handlePublish = async (training: Training) => {
+    const doPublish = async (training: Training) => {
+        setPublishTarget(null);
         setActionInProgress(training.id);
         try {
             const updated = await managerTrainingsApi.publishTraining(training.id);
@@ -287,7 +289,7 @@ export const ManagerPublishTrainings: React.FC = () => {
                                                                 <Button
                                                                     size="sm"
                                                                     disabled={isActing}
-                                                                    onClick={() => handlePublish(training)}
+                                                                    onClick={() => setPublishTarget(training)}
                                                                     className="h-7 text-xs"
                                                                 >
                                                                     <Globe className="h-3.5 w-3.5 mr-1" />
@@ -346,6 +348,25 @@ export const ManagerPublishTrainings: React.FC = () => {
                 </CardContent>
             </Card>
         </div>
+
+        {/* Publish confirmation */}
+        <AlertDialog open={!!publishTarget} onOpenChange={(open) => { if (!open) setPublishTarget(null); }}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Publish "{publishTarget?.title}"?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        This training will become visible to all assigned learners immediately. Make sure the content is final before publishing.
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => publishTarget && doPublish(publishTarget)}>
+                        <Globe className="h-3.5 w-3.5 mr-1.5" />
+                        Publish
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
 
         {/* Unpublish confirmation — always shown */}
         <AlertDialog open={!!unpublishTarget} onOpenChange={(open) => { if (!open) setUnpublishTarget(null); }}>

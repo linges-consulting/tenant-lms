@@ -6,7 +6,7 @@ import {
   Users, LayoutDashboard, Award,
   BarChart3, TrendingUp, UserCheck, BookOpen,
   GraduationCap, Layers, ClipboardList,
-  FileText, Activity, RefreshCw, Globe, Tag,
+  FileText, Activity, RefreshCw, Globe, Tag, ChevronDown,
 } from 'lucide-react';
 import { UserDropdown } from './UserDropdown';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
@@ -90,38 +90,63 @@ interface NavSectionProps {
   title: string;
   items: NavItem[];
   collapsed: boolean;
+  storageKey: string;
 }
 
-function NavSection({ title, items, collapsed }: NavSectionProps) {
+function NavSection({ title, items, collapsed, storageKey }: NavSectionProps) {
+  const [open, setOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem(storageKey) !== 'false'; } catch { return true; }
+  });
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    try { localStorage.setItem(storageKey, String(next)); } catch { /* ignore */ }
+  };
+
   return (
     <div className="mb-4">
       {!collapsed && (
-        <p className="px-3 mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          {title}
-        </p>
+        <button
+          onClick={toggle}
+          className="w-full flex items-center justify-between px-3 mb-1 group"
+          aria-expanded={open}
+        >
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground group-hover:text-foreground transition-colors">
+            {title}
+          </span>
+          <ChevronDown
+            className={cn(
+              'h-3 w-3 text-muted-foreground group-hover:text-foreground transition-all duration-200',
+              !open && '-rotate-90',
+            )}
+          />
+        </button>
       )}
-      <div className="space-y-0.5">
-        {items.map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to.split('/').length <= 2}
-            aria-label={label}
-            className={({ isActive }) =>
-              cn(
-                'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-                'hover:bg-accent hover:text-accent-foreground',
-                isActive ? 'bg-primary text-primary-foreground font-medium' : 'text-foreground',
-                collapsed && 'justify-center px-2',
-              )
-            }
-            title={collapsed ? label : undefined}
-          >
-            <Icon className="h-4 w-4 shrink-0" />
-            {!collapsed && <span>{label}</span>}
-          </NavLink>
-        ))}
-      </div>
+      {(collapsed || open) && (
+        <div className="space-y-0.5">
+          {items.map(({ to, icon: Icon, label }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to.split('/').length <= 2}
+              aria-label={label}
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                  'hover:bg-accent hover:text-accent-foreground',
+                  isActive ? 'bg-primary text-primary-foreground font-medium' : 'text-foreground',
+                  collapsed && 'justify-center px-2',
+                )
+              }
+              title={collapsed ? label : undefined}
+            >
+              <Icon className="h-4 w-4 shrink-0" />
+              {!collapsed && <span>{label}</span>}
+            </NavLink>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -299,19 +324,19 @@ export function Sidebar({ user, activeMembership, collapsed, branding, logout }:
 
       <div className="flex-1 overflow-y-auto py-4 px-2">
         {isAdmin ? (
-          <NavSection title="Admin" items={ADMIN_NAV} collapsed={collapsed} />
+          <NavSection title="Admin" items={ADMIN_NAV} collapsed={collapsed} storageKey="sidebar-admin-open" />
         ) : hasManagerAccess ? (
           <>
-            <NavSection title="My Learning" items={MANAGER_COMMON_NAV} collapsed={collapsed} />
+            <NavSection title="My Learning" items={MANAGER_COMMON_NAV} collapsed={collapsed} storageKey="sidebar-mylearning-open" />
             {isManager && (
-              <NavSection title="Management" items={MANAGEMENT_NAV} collapsed={collapsed} />
+              <NavSection title="Management" items={MANAGEMENT_NAV} collapsed={collapsed} storageKey="sidebar-management-open" />
             )}
             {isCreator && (
-              <NavSection title="Studio" items={STUDIO_NAV} collapsed={collapsed} />
+              <NavSection title="Studio" items={STUDIO_NAV} collapsed={collapsed} storageKey="sidebar-studio-open" />
             )}
           </>
         ) : (
-          <NavSection title="Learning" items={LEARNING_NAV} collapsed={collapsed} />
+          <NavSection title="Learning" items={LEARNING_NAV} collapsed={collapsed} storageKey="sidebar-learning-open" />
         )}
       </div>
 

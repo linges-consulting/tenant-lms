@@ -148,6 +148,28 @@ async def get_groups_batch(group_ids: List[str]) -> dict:
             # On failure, return empty dict or fallback gracefully
             return {}
 
+async def get_group_members_batch(group_ids: List[str]) -> dict[str, list[str]]:
+    """
+    Calls Auth Service internal endpoint to get member user_ids for a batch of
+    group IDs. Returns {group_id: [user_id, ...]}.
+    """
+    if not group_ids:
+        return {}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                f"{settings.AUTH_SERVICE_URL}/api/v1/groups/internal/members",
+                headers={"X-Internal-Api-Key": settings.INTERNAL_API_KEY},
+                json=group_ids,
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception:
+            return {}
+
+
 async def get_current_user(token: TokenDep) -> UserAuth:
     """
     Validates token via Auth Service and returns a transient UserAuth object.

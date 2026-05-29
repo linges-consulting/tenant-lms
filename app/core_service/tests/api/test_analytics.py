@@ -31,16 +31,21 @@ async def test_analytics_list_returns_trainings(client, db_session):
     tid = str(uuid.uuid4())
     user = _make_manager(tid)
     _set_user(user)
+    learner_id = str(uuid.uuid4())
     training = Training(
         id=str(uuid.uuid4()), tenant_id=tid, title="Safety 101",
         category="Safety", is_published=True, created_by_id=user.id,
     )
     db_session.add(training)
-    assignment = TrainingAssignment(
+    # Assignment + matching Enrollment (auth service creates both in production)
+    db_session.add(TrainingAssignment(
         id=str(uuid.uuid4()), tenant_id=tid,
-        training_id=training.id, user_id=str(uuid.uuid4()),
-    )
-    db_session.add(assignment)
+        training_id=training.id, user_id=learner_id,
+    ))
+    db_session.add(Enrollment(
+        id=str(uuid.uuid4()), tenant_id=tid,
+        training_id=training.id, user_id=learner_id,
+    ))
     await db_session.commit()
     try:
         with patch("app.api.v1.endpoints.analytics.deps.get_users_batch", new_callable=AsyncMock) as mock_batch:
