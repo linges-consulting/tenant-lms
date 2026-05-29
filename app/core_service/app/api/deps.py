@@ -102,8 +102,8 @@ async def get_tenant_branding(tenant_id: str) -> dict:
 
 async def get_users_batch(user_ids: List[str]) -> dict:
     """
-    Calls Auth Service internal endpoint to get basic details (full_name, email)
-    for a list of user IDs. Returns a dict of {user_id: {"full_name": ..., "email": ...}}.
+    Calls Auth Service internal endpoint to get basic details (full_name, email, username)
+    for a list of user IDs. Returns a dict of {user_id: {"full_name": ..., "email": ..., "username": ...}}.
     """
     if not user_ids:
         return {}

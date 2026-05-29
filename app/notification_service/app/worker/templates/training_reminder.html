@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Training Reminder — Training Portal{% endblock %}
+{% block header_title %}Training Reminder{% endblock %}
+{% block header_subtitle %}You have an outstanding training to complete{% endblock %}
+
+{% block content %}
+<p>Hi there,</p>
+<p>{{ manager_name }} has sent you a reminder to complete the following training.</p>
+
+<div class="info-box">
+  <strong>Training:</strong> {{ training_title }}<br>
+  <strong>Due date:</strong> {{ due_date }}
+</div>
+
+<div class="btn-wrap">
+  <a href="{{ frontend_url | default('#') }}/dashboard" class="btn">Go to My Trainings</a>
+</div>
+{% endblock %}

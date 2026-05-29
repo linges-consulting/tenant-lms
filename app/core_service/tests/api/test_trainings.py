@@ -2338,3 +2338,234 @@ async def test_clone_training_does_not_copy_enrollments(client, db_session):
         assert result.scalars().all() == [], "Clone must have no enrollments"
     finally:
         _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# content_expires_at — BR-802 (creator-set content expiry)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_training_create_accepts_content_expires_at(client, db_session):
+    """BR-802: Creator can set content_expires_at when creating a training."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    _set_user(creator)
+    try:
+        resp = await client.post(
+            "/api/v1/trainings",
+            json={
+                "title": "Expiring Training",
+                "category": "Compliance",
+                "requires_certificate": False,
+                "content_expires_at": "2030-01-01T00:00:00Z",
+            },
+        )
+        assert resp.status_code in (200, 201), resp.text
+        data = resp.json()
+        assert "content_expires_at" in data
+        assert data["content_expires_at"] is not None
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_training_create_no_expires_at_field(client, db_session):
+    """BR-802: The old expires_at field no longer exists on the Training response."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    _set_user(creator)
+    try:
+        resp = await client.post(
+            "/api/v1/trainings",
+            json={"title": "No Expiry", "category": "Safety", "requires_certificate": False},
+        )
+        assert resp.status_code in (200, 201), resp.text
+        data = resp.json()
+        assert "expires_at" not in data, "expires_at must not appear on the Training response"
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_auto_archive_uses_content_expires_at(client, db_session):
+    """BR-802: Auto-archive endpoint archives trainings whose content_expires_at has passed."""
+    from app.core.config import settings
+
+    tenant_id = str(uuid.uuid4())
+    past = datetime.now(timezone.utc) - timedelta(days=1)
+    future = datetime.now(timezone.utc) + timedelta(days=30)
+
+    expired_training = Training(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, title="Expired Content",
+        category="test", is_published=True, is_archived=False, is_active=True,
+        requires_certificate=False, content_expires_at=past,
+    )
+    live_training = Training(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, title="Still Live",
+        category="test", is_published=True, is_archived=False, is_active=True,
+        requires_certificate=False, content_expires_at=future,
+    )
+    db_session.add_all([expired_training, live_training])
+    await db_session.commit()
+
+    resp = await client.post(
+        "/api/v1/trainings/internal/auto-archive-expired",
+        headers={"X-Internal-Api-Key": settings.INTERNAL_API_KEY},
+    )
+    assert resp.status_code == 200, resp.text
+
+    await db_session.refresh(expired_training)
+    await db_session.refresh(live_training)
+    assert expired_training.is_archived is True
+    assert expired_training.is_published is False
+    assert live_training.is_archived is False
+
+
+# ---------------------------------------------------------------------------
+# PATCH /trainings/assignments/{assignment_id} — BR-801
+# ---------------------------------------------------------------------------
+
+def _make_manager(tenant_id: str):
+    return make_user_auth(
+        user_id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        roles=["Business Manager"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_assignment_due_date_success(client, db_session):
+    """BR-801: Business Manager can update due_date on an existing assignment."""
+    tenant_id = str(uuid.uuid4())
+    manager = _make_manager(tenant_id)
+    learner_id = str(uuid.uuid4())
+
+    training = Training(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, title="T", category="C",
+        is_published=True, requires_certificate=False,
+    )
+    assignment = TrainingAssignment(
+        id=str(uuid.uuid4()), training_id=training.id, tenant_id=tenant_id,
+        user_id=learner_id, assigned_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([training, assignment])
+    await db_session.commit()
+
+    new_due = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
+    _set_user(manager)
+    try:
+        resp = await client.patch(
+            f"/api/v1/trainings/assignments/{assignment.id}",
+            json={"due_date": new_due},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["id"] == assignment.id
+        assert data["due_date"] is not None
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_update_assignment_clears_due_date(client, db_session):
+    """BR-801: Passing due_date=null clears the due date on an assignment."""
+    tenant_id = str(uuid.uuid4())
+    manager = _make_manager(tenant_id)
+    learner_id = str(uuid.uuid4())
+
+    training = Training(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, title="T", category="C",
+        is_published=True, requires_certificate=False,
+    )
+    assignment = TrainingAssignment(
+        id=str(uuid.uuid4()), training_id=training.id, tenant_id=tenant_id,
+        user_id=learner_id, due_date=datetime.now(timezone.utc) + timedelta(days=7),
+        assigned_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([training, assignment])
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.patch(
+            f"/api/v1/trainings/assignments/{assignment.id}",
+            json={"due_date": None},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["due_date"] is None
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_update_assignment_forbidden_for_creator(client, db_session):
+    """BR-801: Training Creator cannot update assignment due dates."""
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+    learner_id = str(uuid.uuid4())
+
+    training = Training(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, title="T", category="C",
+        is_published=True, requires_certificate=False,
+    )
+    assignment = TrainingAssignment(
+        id=str(uuid.uuid4()), training_id=training.id, tenant_id=tenant_id,
+        user_id=learner_id, assigned_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([training, assignment])
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.patch(
+            f"/api/v1/trainings/assignments/{assignment.id}",
+            json={"due_date": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()},
+        )
+        assert resp.status_code == 403, resp.text
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_update_assignment_not_found(client, db_session):
+    """PATCH on a nonexistent assignment_id returns 404."""
+    tenant_id = str(uuid.uuid4())
+    manager = _make_manager(tenant_id)
+    _set_user(manager)
+    try:
+        resp = await client.patch(
+            f"/api/v1/trainings/assignments/{uuid.uuid4()}",
+            json={"due_date": None},
+        )
+        assert resp.status_code == 404, resp.text
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_update_assignment_tenant_isolation(client, db_session):
+    """Manager from tenant A cannot update an assignment belonging to tenant B."""
+    tenant_a = str(uuid.uuid4())
+    tenant_b = str(uuid.uuid4())
+    manager_a = _make_manager(tenant_a)
+
+    training = Training(
+        id=str(uuid.uuid4()), tenant_id=tenant_b, title="T", category="C",
+        is_published=True, requires_certificate=False,
+    )
+    assignment = TrainingAssignment(
+        id=str(uuid.uuid4()), training_id=training.id, tenant_id=tenant_b,
+        user_id=str(uuid.uuid4()), assigned_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([training, assignment])
+    await db_session.commit()
+
+    _set_user(manager_a)
+    try:
+        resp = await client.patch(
+            f"/api/v1/trainings/assignments/{assignment.id}",
+            json={"due_date": None},
+        )
+        assert resp.status_code == 404, resp.text
+    finally:
+        _clear_overrides()

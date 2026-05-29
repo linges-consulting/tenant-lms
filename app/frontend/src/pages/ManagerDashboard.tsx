@@ -13,6 +13,7 @@ import { UserAvatar } from '../components/UserAvatar';
 import type { User } from '../api/users';
 import type { Training } from '../api/trainings';
 import { useNavigate } from 'react-router-dom';
+import { useManagerDashboard } from '../queries/dashboards';
 
 export const ManagerDashboard: React.FC = () => {
     const { user, activeMembership } = useAuth();
@@ -20,6 +21,9 @@ export const ManagerDashboard: React.FC = () => {
     const [employees, setEmployees] = useState<User[]>([]);
     const [trainings, setTrainings] = useState<Training[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+
+    const { data: dashboardData } = useManagerDashboard();
+    const lockoutCount = dashboardData?.quiz_lockouts ?? 0;
 
     const isManager = activeMembership?.is_business_manager;
     const isCreator = activeMembership?.is_training_creator;
@@ -121,6 +125,33 @@ export const ManagerDashboard: React.FC = () => {
                             </CardContent>
                         </Card>
                     </>
+                )}
+                {isManager && (
+                    <Card
+                        className={cn(
+                            'border-border/50 shadow-sm cursor-pointer transition-colors',
+                            lockoutCount > 0 ? 'border-destructive/40 hover:border-destructive/60' : 'hover:border-border'
+                        )}
+                        onClick={() => navigate('/manage/analytics')}
+                    >
+                        <CardContent className="p-6">
+                            <p className={cn(
+                                'text-sm font-medium mb-1',
+                                lockoutCount > 0 ? 'text-destructive' : 'text-muted-foreground'
+                            )}>
+                                Quiz Lockouts
+                            </p>
+                            <div className="flex items-baseline gap-3">
+                                <p className={cn('text-3xl font-bold', lockoutCount > 0 ? 'text-destructive' : '')}>
+                                    {isLoading ? '—' : lockoutCount}
+                                </p>
+                                <AlertCircle className={cn('w-4 h-4', lockoutCount > 0 ? 'text-destructive' : 'text-muted-foreground')} />
+                            </div>
+                            {lockoutCount > 0 && (
+                                <p className="text-xs text-destructive mt-1">Click to view → Analytics</p>
+                            )}
+                        </CardContent>
+                    </Card>
                 )}
             </div>
 

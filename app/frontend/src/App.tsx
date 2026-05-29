@@ -31,6 +31,8 @@ import { AdminCertificateTemplateEditor } from './pages/AdminCertificateTemplate
 import { LearnerCertificates } from './pages/LearnerCertificates';
 import { NotFound } from './pages/NotFound';
 import { ManagerReports } from './pages/ManagerReports';
+import { ManagerAnalytics } from './pages/ManagerAnalytics';
+import { ManagerAnalyticsDetail } from './pages/ManagerAnalyticsDetail';
 import { ManagerCategoryManager } from './pages/ManagerCategoryManager';
 import { ManagerPublishTrainings } from './pages/ManagerPublishTrainings';
 import { AdminBulkImport } from './pages/AdminBulkImport';
@@ -85,6 +87,8 @@ function App() {
           <Route path="certificates" element={<LearnerCertificates />} />
           <Route path="learn/:id" element={<TrainingViewer />} />
           <Route path="reports" element={<AuthGuard requireBusinessManager><ManagerReports /></AuthGuard>} />
+          <Route path="analytics" element={<AuthGuard requireBusinessManager><ManagerAnalytics /></AuthGuard>} />
+          <Route path="analytics/:trainingId" element={<AuthGuard requireBusinessManager><ManagerAnalyticsDetail /></AuthGuard>} />
           <Route path="categories" element={<AuthGuard requireBusinessManager><ManagerCategoryManager /></AuthGuard>} />
           <Route path="publish" element={<AuthGuard requireBusinessManager><ManagerPublishTrainings /></AuthGuard>} />
           <Route path="publish/:id/assignments" element={<AuthGuard requireBusinessManager><ManagerTrainingAssignments /></AuthGuard>} />

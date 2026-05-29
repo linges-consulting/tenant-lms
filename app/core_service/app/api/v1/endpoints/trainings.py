@@ -358,6 +358,7 @@ async def create_training(
         tags=training_in.tags,
         requires_recertification=training_in.requires_recertification,
         recertification_period_days=training_in.recertification_period_days,
+        content_expires_at=training_in.content_expires_at,
     )
     training_id = db_item.id
     db.add(db_item)

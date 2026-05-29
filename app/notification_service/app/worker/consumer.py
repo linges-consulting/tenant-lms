@@ -180,6 +180,31 @@ async def handle_event(db: AsyncSession, event: dict):
                 notification_type="info",
             ))
 
+    elif event_type == "TRAINING_REMINDER":
+        # In-app + email to learner — manager-initiated manual reminder
+        notified_user_id = payload.get("user_id")
+        if notified_user_id:
+            db.add(Notification(
+                id=str(uuid.uuid4()),
+                event_id=event_id,
+                user_id=notified_user_id,
+                tenant_id=payload["tenant_id"],
+                title="Training Reminder",
+                message=f"Reminder: please complete '{payload.get('training_title', 'your training')}'.",
+                notification_type="info",
+            ))
+        await send_email(
+            to=payload.get("user_email", ""),
+            subject=f"Training Reminder: {payload.get('training_title', '')}",
+            template_name="training_reminder.html",
+            context={
+                "training_title": payload.get("training_title"),
+                "due_date": payload.get("due_date"),
+                "manager_name": payload.get("manager_name"),
+                "frontend_url": settings.FRONTEND_URL,
+            },
+        )
+
     else:
         logger.warning("Unhandled event type: %s", event_type)
         return

@@ -21,8 +21,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { userService, type User, type UserStats, type UserCertificate } from '../api/users';
+import { analyticsApi, type ProfileTrainingItem } from '../api/analytics';
 import { useAuth } from '../contexts/auth-context';
 import { ProfileCard } from '../components/ProfileCard';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 
 // Helper function to check if currentUser can view the profile
@@ -59,6 +61,23 @@ export const ProfilePage: React.FC = () => {
 
     // Complex Tab System: Selected tenant for filtering
     const [selectedTenantId, setSelectedTenantId] = useState<string | 'global'>('global');
+
+    // Trainings tab state
+    const [profileTrainings, setProfileTrainings] = useState<ProfileTrainingItem[]>([]);
+    const [loadingTrainings, setLoadingTrainings] = useState(false);
+
+    const handleTrainingsTabActivate = async () => {
+        if (!user || loadingTrainings || profileTrainings.length > 0) return;
+        setLoadingTrainings(true);
+        try {
+            const data = await analyticsApi.getProfileHistory(user.id);
+            setProfileTrainings(data);
+        } catch {
+            // silently fail — tab shows empty state
+        } finally {
+            setLoadingTrainings(false);
+        }
+    };
 
     // Edit Name Modal State (Admin Override)
     const [isEditNameOpen, setIsEditNameOpen] = useState(false);
@@ -284,6 +303,13 @@ export const ProfilePage: React.FC = () => {
                                 >
                                     Activity
                                 </TabsTrigger>
+                                <TabsTrigger
+                                    value="trainings"
+                                    onClick={handleTrainingsTabActivate}
+                                    className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-0 h-12 font-semibold"
+                                >
+                                    Trainings
+                                </TabsTrigger>
                             </TabsList>
 
                             {/* Complex Tab System: Tenant Selector for SysAdmins */}
@@ -349,7 +375,9 @@ export const ProfilePage: React.FC = () => {
                                                 This user is actively enrolled in {stats.in_progress_courses} course{stats.in_progress_courses !== 1 ? 's' : ''}.
                                             </p>
                                             <div className="flex items-center justify-center h-20 border border-dashed rounded-lg bg-muted/30">
-                                                <p className="text-sm text-muted-foreground">Loading course details...</p>
+                                                <p className="text-sm text-muted-foreground">
+                                                    See the <button onClick={handleTrainingsTabActivate} className="underline text-primary">Trainings tab</button> for full history.
+                                                </p>
                                             </div>
                                         </div>
                                     ) : (
@@ -409,6 +437,66 @@ export const ProfilePage: React.FC = () => {
                                     <div className="flex items-center justify-center h-32 border border-dashed rounded-lg bg-muted/30">
                                         <p className="text-sm text-muted-foreground">Activity tracking coming soon</p>
                                     </div>
+                                </CardContent>
+                            </Card>
+                        </TabsContent>
+
+                        <TabsContent value="trainings" className="pt-6">
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle>Training History</CardTitle>
+                                    <CardDescription>All assigned trainings and their completion status</CardDescription>
+                                </CardHeader>
+                                <CardContent className="p-0">
+                                    {loadingTrainings ? (
+                                        <div className="p-8 flex justify-center">
+                                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                                        </div>
+                                    ) : profileTrainings.length === 0 ? (
+                                        <div className="p-8 text-center text-muted-foreground text-sm italic">
+                                            No trainings assigned.
+                                        </div>
+                                    ) : (
+                                        <Table>
+                                            <TableHeader>
+                                                <TableRow>
+                                                    <TableHead>Training</TableHead>
+                                                    <TableHead>Category</TableHead>
+                                                    <TableHead>Status</TableHead>
+                                                    <TableHead>Due Date</TableHead>
+                                                    <TableHead>Completed</TableHead>
+                                                    <TableHead>Quizzes</TableHead>
+                                                </TableRow>
+                                            </TableHeader>
+                                            <TableBody>
+                                                {profileTrainings.map((t: ProfileTrainingItem) => (
+                                                    <TableRow key={t.training_id}>
+                                                        <TableCell className="font-medium">{t.title}</TableCell>
+                                                        <TableCell className="text-muted-foreground text-sm">{t.category}</TableCell>
+                                                        <TableCell>
+                                                            <Badge className={cn({
+                                                                'bg-primary/10 text-primary border-primary/20': t.status === 'completed',
+                                                                'bg-blue-500/10 text-blue-600 border-blue-500/20': t.status === 'in_progress',
+                                                                'bg-destructive/10 text-destructive border-destructive/20': t.status === 'overdue',
+                                                                'bg-muted text-muted-foreground border-border': t.status === 'not_started',
+                                                            })}>
+                                                                {{ completed: 'Completed', in_progress: 'In Progress', overdue: 'Overdue', not_started: 'Not Started' }[t.status]}
+                                                            </Badge>
+                                                        </TableCell>
+                                                        <TableCell className="text-sm text-muted-foreground">
+                                                            {t.due_date ? new Date(t.due_date).toLocaleDateString() : '—'}
+                                                        </TableCell>
+                                                        <TableCell className="text-sm text-muted-foreground">
+                                                            {t.completed_at ? new Date(t.completed_at).toLocaleDateString() : '—'}
+                                                        </TableCell>
+                                                        <TableCell className="text-sm text-muted-foreground">
+                                                            {t.quiz_total > 0 ? `${t.quiz_passed}/${t.quiz_total} passed` : '—'}
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ))}
+                                            </TableBody>
+                                        </Table>
+                                    )}
                                 </CardContent>
                             </Card>
                         </TabsContent>

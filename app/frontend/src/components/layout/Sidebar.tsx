@@ -4,7 +4,7 @@ import { NavLink } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import {
   Users, LayoutDashboard, Award,
-  BarChart3, UserCheck, BookOpen,
+  BarChart3, TrendingUp, UserCheck, BookOpen,
   GraduationCap, Layers, ClipboardList,
   FileText, Activity, RefreshCw, Globe, Tag,
 } from 'lucide-react';
@@ -67,6 +67,7 @@ const MANAGEMENT_NAV: NavItem[] = [
   { to: '/manage/employees', icon: Users, label: 'Employees' },
   { to: '/manage/groups', icon: UserCheck, label: 'Groups' },
   { to: '/manage/reports', icon: BarChart3, label: 'Reports' },
+  { to: '/manage/analytics', icon: TrendingUp, label: 'Analytics' },
   { to: '/manage/publish', icon: Globe, label: 'Review & Publish' },
   { to: '/manage/categories', icon: Tag, label: 'Categories' },
 ];
