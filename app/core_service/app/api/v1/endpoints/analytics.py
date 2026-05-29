@@ -464,11 +464,13 @@ async def send_training_reminder(
         )
     )
     asgn_map = {a.user_id: a for a in asgn_q.scalars().all()}
-    users_data = await deps.get_users_batch(user_ids)
+    # Only fetch PII for users with a verified assignment in this tenant+training
+    users_data = await deps.get_users_batch(list(asgn_map.keys()))
 
-    for uid in user_ids:
+    # Iterate over validated asgn_map — not the raw request body — to prevent
+    # reminders being sent to users not assigned to this training.
+    for uid, asgn in asgn_map.items():
         uinfo = users_data.get(uid, {})
-        asgn = asgn_map.get(uid)
         await publisher.publish_event(
             "TRAINING_REMINDER",
             {
@@ -477,11 +479,11 @@ async def send_training_reminder(
                 "user_email": uinfo.get("email", ""),
                 "training_id": training_id,
                 "training_title": training.title,
-                "due_date": asgn.due_date.strftime("%B %d, %Y") if asgn and asgn.due_date else "No due date",
+                "due_date": asgn.due_date.strftime("%B %d, %Y") if asgn.due_date else "No due date",
                 "manager_name": current_user.full_name or "Your manager",
             },
         )
-    return {"sent": len(user_ids)}
+    return {"sent": len(asgn_map)}
 
 
 _LIST_CSV_HEADERS = [
