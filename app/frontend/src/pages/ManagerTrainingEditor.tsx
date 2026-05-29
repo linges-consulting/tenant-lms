@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { formatDistanceToNow } from 'date-fns';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -12,6 +13,8 @@ import { ArrowLeft, PlusCircle, Save, Globe, RotateCcw, Video, FileText, Loader2
 import { PageLoader } from '../components/ui/PageLoader';
 
 import { managerTrainingsApi, trainingsApi } from '../api/trainings';
+import { getCategories } from '../api/categories';
+import type { Category } from '../api/categories';
 import type { TrainingStructure, TrainingHistorySnapshot, Chapter } from '../api/trainings';
 import { certificatesApi } from '../api/certificates';
 import type { CertificateTemplate } from '../api/certificates';
@@ -68,8 +71,10 @@ export const ManagerTrainingEditor: React.FC = () => {
     const [title, setTitle] = useState('');
     const [description, setDescription] = useState('');
     const [category, setCategory] = useState('general');
+    const [contentExpiresAt, setContentExpiresAt] = useState<string | null>(null);
     const [templateId, setTemplateId] = useState<string | undefined>(undefined);
     const [templates, setTemplates] = useState<CertificateTemplate[]>([]);
+    const [categories, setCategories] = useState<Category[]>([]);
 
     const [history, setHistory] = useState<TrainingHistorySnapshot[]>([]);
     const [showHistory, setShowHistory] = useState(false);
@@ -95,11 +100,13 @@ export const ManagerTrainingEditor: React.FC = () => {
     const [isUploadingScorm, setIsUploadingScorm] = useState(false);
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+    const [pdfRemoved, setPdfRemoved] = useState(false);
 
     // Quiz Builder State
     const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
     const [passingScore, setPassingScore] = useState(80);
     const [maxAttempts, setMaxAttempts] = useState(0);
+    const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set());
 
     // Editing chapter state (inline)
     const [editingChapterId, setEditingChapterId] = useState<string | null>(null);
@@ -134,6 +141,7 @@ export const ManagerTrainingEditor: React.FC = () => {
                 setTitle(data.title);
                 setDescription(data.description || '');
                 setCategory(data.category || 'general');
+                setContentExpiresAt(data.content_expires_at ?? null);
                 setTemplateId(data.requires_certificate ? data.template_id : undefined);
                 const presets = ['ocean', 'sunset', 'forest', 'ember'];
                 setThumbnail(data.thumbnail || `preset:${presets[Math.floor(Math.random() * presets.length)]}`);
@@ -168,7 +176,16 @@ export const ManagerTrainingEditor: React.FC = () => {
                 toast.error('Failed to load certificate templates. You can still save other settings.');
             }
         };
+        const fetchCategories = async () => {
+            try {
+                const data = await getCategories();
+                setCategories(data);
+            } catch (error) {
+                console.error('Failed to fetch categories:', error);
+            }
+        };
         fetchTemplates();
+        fetchCategories();
     }, []);
 
     const handleSaveMetadata = async () => {
@@ -209,6 +226,7 @@ export const ManagerTrainingEditor: React.FC = () => {
                 requires_certificate: !!templateId,
                 template_id: templateId,
                 thumbnail: thumbnail,
+                content_expires_at: contentExpiresAt,
             });
             await fetchStructure();
         } catch (error: unknown) {
@@ -353,9 +371,19 @@ export const ManagerTrainingEditor: React.FC = () => {
                     max_attempts: maxAttempts,
                 };
             } else if (newChapterType === 'PDF') {
-                // The PDF URL is populated by uploadChapterContent below.
-                // Don't overwrite an existing url when only the description is edited.
-                contentData = { description: newChapterDescription };
+                // Preserve existing pdf_url when editing description without re-uploading.
+                // uploadChapterContent will overwrite pdf_url if a new file is selected.
+                // If pdfRemoved is true, clear the pdf_url so the chapter has no file.
+                const existingChapter = editingChapterId
+                    ? [...(training?.orphan_chapters || []), ...(training?.modules?.flatMap(m => m.chapters || []) || [])].find(c => c.id === editingChapterId)
+                    : null;
+                const baseContentData = pdfRemoved
+                    ? { ...existingChapter?.content_data, pdf_url: undefined, url: undefined }
+                    : (existingChapter?.content_data || {});
+                contentData = {
+                    ...baseContentData,
+                    description: newChapterDescription,
+                };
             } else if (newChapterType === 'SCORM') {
                 // SCORM content_data (index_url, base_path) is filled in by the upload endpoint.
                 contentData = {};
@@ -408,7 +436,9 @@ export const ManagerTrainingEditor: React.FC = () => {
             setNewChapterDescription('');
             setScormFile(null);
             setPdfFile(null);
+            setPdfRemoved(false);
             setQuizQuestions([]);
+            setExpandedQuestions(new Set());
             setMaxAttempts(0);
             setPassingScore(80);
             setActiveInlineForm(null);
@@ -554,8 +584,10 @@ export const ManagerTrainingEditor: React.FC = () => {
         setNewChapterContent('');
         setNewChapterDescription('');
         setQuizQuestions([]);
+        setExpandedQuestions(new Set());
         setNewChapterType('VIDEO');
         setChapterSaveAttempted(false);
+        setPdfRemoved(false);
     };
 
     const buildDefaultOptions = (count = 2): QuizOption[] =>
@@ -579,11 +611,33 @@ export const ManagerTrainingEditor: React.FC = () => {
     };
 
     const handleAddQuestion = (type: QuizQuestionType = 'multiple_choice') => {
-        setQuizQuestions([...quizQuestions, buildDefaultQuestion(type)]);
+        const newQ = buildDefaultQuestion(type);
+        setQuizQuestions([...quizQuestions, newQ]);
+        setExpandedQuestions(new Set([newQ.id]));
     };
 
     const handleRemoveQuestion = (qId: string) => {
         setQuizQuestions(quizQuestions.filter(q => q.id !== qId));
+        setExpandedQuestions(prev => { const next = new Set(prev); next.delete(qId); return next; });
+    };
+
+    const handleToggleQuestion = (qId: string) => {
+        setExpandedQuestions(prev => {
+            const next = new Set(prev);
+            if (next.has(qId)) { next.delete(qId); } else { next.add(qId); }
+            return next;
+        });
+    };
+
+    const handleMoveQuestion = (qId: string, direction: 'up' | 'down') => {
+        const idx = quizQuestions.findIndex(q => q.id === qId);
+        if (idx === -1) return;
+        if (direction === 'up' && idx === 0) return;
+        if (direction === 'down' && idx === quizQuestions.length - 1) return;
+        const next = [...quizQuestions];
+        const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+        [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+        setQuizQuestions(next);
     };
 
     const handleUpdateQuestion = (qId: string, text: string) => {
@@ -881,19 +935,56 @@ export const ManagerTrainingEditor: React.FC = () => {
                     <div className="space-y-4">
                         <div className="space-y-2">
                             <Label className="text-secondary-foreground">PDF Document</Label>
-                            <div className={cn('flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-lg cursor-pointer transition-colors', pdfFile ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50 hover:bg-muted/30')}>
-                                <label className="flex flex-col items-center justify-center w-full h-full cursor-pointer">
-                                    <FileText className="w-8 h-8 mb-2 text-muted-foreground" />
-                                    {pdfFile ? (
-                                        <span className="text-sm font-medium text-primary">{pdfFile.name}</span>
-                                    ) : editingChapterId ? (
-                                        <span className="text-sm text-muted-foreground">Click to replace the PDF</span>
-                                    ) : (
-                                        <span className="text-sm text-muted-foreground">Click to upload a PDF</span>
-                                    )}
-                                    <input type="file" accept="application/pdf,.pdf" className="hidden" onChange={e => setPdfFile(e.target.files?.[0] ?? null)} />
-                                </label>
-                            </div>
+                            {(() => {
+                                const existingPdfUrl = editingChapterId
+                                    ? ([...(training?.orphan_chapters || []), ...(training?.modules?.flatMap(m => m.chapters || []) || [])].find(c => c.id === editingChapterId)?.content_data?.url as string | undefined) ||
+                                      ([...(training?.orphan_chapters || []), ...(training?.modules?.flatMap(m => m.chapters || []) || [])].find(c => c.id === editingChapterId)?.content_data?.pdf_url as string | undefined)
+                                    : undefined;
+                                if (editingChapterId && existingPdfUrl && !pdfFile && !pdfRemoved) {
+                                    return (
+                                        <div className="mb-2">
+                                            <p className="text-xs text-muted-foreground mb-1">Current PDF:</p>
+                                            <iframe src={existingPdfUrl} className="w-full h-48 border rounded" title="Current PDF" />
+                                            <div className="flex gap-2 mt-1">
+                                                <Button variant="outline" size="sm" onClick={() => document.getElementById('pdf-replace-input')?.click()}>Replace</Button>
+                                                <Button variant="outline" size="sm" onClick={() => setPdfRemoved(true)}>Remove</Button>
+                                            </div>
+                                        </div>
+                                    );
+                                }
+                                if (pdfRemoved) {
+                                    return (
+                                        <div className="mb-2 flex items-center gap-3 p-3 rounded-md border border-border bg-muted/20">
+                                            <FileText className="w-5 h-5 text-muted-foreground shrink-0" />
+                                            <span className="text-sm text-muted-foreground flex-1">No PDF</span>
+                                            <Button variant="ghost" size="sm" className="text-xs" onClick={() => setPdfRemoved(false)}>Undo</Button>
+                                        </div>
+                                    );
+                                }
+                                return null;
+                            })()}
+                            <input
+                                id="pdf-replace-input"
+                                type="file"
+                                accept="application/pdf,.pdf"
+                                className="hidden"
+                                onChange={e => { setPdfFile(e.target.files?.[0] ?? null); setPdfRemoved(false); }}
+                            />
+                            {!pdfRemoved && (
+                                <div className={cn('flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-lg cursor-pointer transition-colors', pdfFile ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50 hover:bg-muted/30')}>
+                                    <label className="flex flex-col items-center justify-center w-full h-full cursor-pointer">
+                                        <FileText className="w-8 h-8 mb-2 text-muted-foreground" />
+                                        {pdfFile ? (
+                                            <span className="text-sm font-medium text-primary">{pdfFile.name}</span>
+                                        ) : editingChapterId ? (
+                                            <span className="text-sm text-muted-foreground">Click to replace the PDF</span>
+                                        ) : (
+                                            <span className="text-sm text-muted-foreground">Click to upload a PDF</span>
+                                        )}
+                                        <input type="file" accept="application/pdf,.pdf" className="hidden" onChange={e => { setPdfFile(e.target.files?.[0] ?? null); setPdfRemoved(false); }} />
+                                    </label>
+                                </div>
+                            )}
                             <p className="text-[11px] text-muted-foreground">
                                 Learners view the PDF inline in their browser. Keep files under 25&nbsp;MB for the best experience.
                             </p>
@@ -949,17 +1040,34 @@ export const ManagerTrainingEditor: React.FC = () => {
                                                 : isSingle
                                                     ? 'Select the single correct answer'
                                                     : 'Select all correct answers';
+                                        const isExpanded = expandedQuestions.has(q.id);
                                         return (
                                         <Card key={q.id} className="border-border shadow-sm">
-                                            <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between space-y-0">
-                                                <CardTitle className="text-sm font-medium">Question {qIndex + 1}</CardTitle>
-                                                <div className="flex items-center gap-2">
-                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => handleRemoveQuestion(q.id)}>
-                                                        <Trash2 className="h-4 w-4" />
+                                            <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between space-y-0 cursor-pointer select-none" onClick={() => handleToggleQuestion(q.id)}>
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    <CardTitle className="text-sm font-medium shrink-0">Q{qIndex + 1}</CardTitle>
+                                                    {!isExpanded && (
+                                                        <span className="text-sm text-muted-foreground truncate max-w-xs">
+                                                            {q.text || <span className="italic opacity-50">No question text</span>}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                                                    <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground" onClick={() => handleMoveQuestion(q.id, 'up')} disabled={qIndex === 0} title="Move up">
+                                                        <ChevronUp className="h-3.5 w-3.5" />
+                                                    </Button>
+                                                    <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground" onClick={() => handleMoveQuestion(q.id, 'down')} disabled={qIndex === quizQuestions.length - 1} title="Move down">
+                                                        <ChevronDown className="h-3.5 w-3.5" />
+                                                    </Button>
+                                                    <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => handleRemoveQuestion(q.id)}>
+                                                        <Trash2 className="h-3.5 w-3.5" />
+                                                    </Button>
+                                                    <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground" onClick={() => handleToggleQuestion(q.id)}>
+                                                        {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                                                     </Button>
                                                 </div>
                                             </CardHeader>
-                                            <CardContent className="p-4 space-y-4 pt-0">
+                                            {isExpanded && <CardContent className="p-4 space-y-4 pt-0">
                                                 <Input value={q.text} onChange={(e) => handleUpdateQuestion(q.id, e.target.value)} placeholder="Enter your question here..." />
 
                                                 <div className="space-y-2">
@@ -1082,7 +1190,7 @@ export const ManagerTrainingEditor: React.FC = () => {
                                                         </div>
                                                     </div>
                                                 )}
-                                            </CardContent>
+                                            </CardContent>}
                                         </Card>
                                         );
                                     })}
@@ -1213,31 +1321,31 @@ export const ManagerTrainingEditor: React.FC = () => {
 
                     {showHistory ? (
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in slide-in-from-right-4 duration-300">
-                            <div className="lg:col-span-2 space-y-4">
-                                <h3 className="text-lg font-bold px-1 flex items-center gap-2">
-                                    <History className="h-5 w-5 text-primary" /> Version Snapshots
-                                </h3>
-                                <div className="space-y-3">
-                                    {history.length === 0
-                                        ? <Card className="p-10 text-center text-muted-foreground border-dashed text-sm">No version history snapshots found.</Card>
-                                        : history.map(snapshot => (
-                                            <Card key={snapshot.id} className="p-4 flex items-center justify-between hover:border-primary/30 transition-colors">
-                                                <div className="flex flex-col">
-                                                    <span className="font-bold">Version {snapshot.version}</span>
-                                                    <span className="text-xs text-muted-foreground">{new Date(snapshot.created_at).toLocaleString()}</span>
-                                                </div>
-                                                <Button variant="outline" size="sm" onClick={() => navigate(`/dashboard/learn/${training.id}?version=${snapshot.version}`)}>
-                                                    View Snapshot
-                                                </Button>
-                                            </Card>
-                                        ))
-                                    }
-                                </div>
-                            </div>
-                            <div className="lg:col-span-1 h-[calc(100vh-200px)] min-h-[500px]">
+                            <div className="lg:col-span-2 h-[calc(100vh-200px)] min-h-[500px]">
                                 <Card className="h-full overflow-hidden shadow-sm flex flex-col">
                                     <TrainingAuditTimeline trainingId={id!} />
                                 </Card>
+                            </div>
+                            <div className="lg:col-span-1 space-y-3">
+                                <h3 className="text-lg font-bold px-1 flex items-center gap-2">
+                                    <History className="h-5 w-5 text-primary" /> Snapshots
+                                </h3>
+                                <div className="space-y-1">
+                                    {history.length === 0
+                                        ? <Card className="p-6 text-center text-muted-foreground border-dashed text-sm">No snapshots found.</Card>
+                                        : history.map(snapshot => (
+                                            <div key={snapshot.id} className="flex items-center gap-2 px-3 py-2 rounded-md border border-border hover:border-primary/30 hover:bg-muted/20 transition-colors">
+                                                <span className="text-sm font-medium shrink-0">v{snapshot.version}</span>
+                                                <span className="text-xs text-muted-foreground flex-1 truncate">
+                                                    {formatDistanceToNow(new Date(snapshot.created_at), { addSuffix: true })}
+                                                </span>
+                                                <Button variant="outline" size="sm" className="h-6 text-xs px-2 shrink-0" onClick={() => navigate(`/manage/learn/${training.id}?preview=true&mode=content&version=${snapshot.version}`)}>
+                                                    View
+                                                </Button>
+                                            </div>
+                                        ))
+                                    }
+                                </div>
                             </div>
                         </div>
                     ) : (
@@ -1270,12 +1378,13 @@ export const ManagerTrainingEditor: React.FC = () => {
                                                 value={category}
                                                 onChange={e => setCategory(e.target.value)}
                                             >
-                                                <option value="general">General</option>
-                                                <option value="compliance">Compliance</option>
-                                                <option value="safety">Safety</option>
-                                                <option value="technical">Technical</option>
-                                                <option value="soft_skills">Soft Skills</option>
-                                                <option value="onboarding">Onboarding</option>
+                                                {categories.length === 0 ? (
+                                                    <option value={category}>{category}</option>
+                                                ) : (
+                                                    categories.map(c => (
+                                                        <option key={c.id} value={c.name}>{c.name}</option>
+                                                    ))
+                                                )}
                                             </select>
                                         </div>
 
@@ -1363,6 +1472,20 @@ export const ManagerTrainingEditor: React.FC = () => {
                                                     <Eye className="w-3.5 h-3.5" />
                                                 </Button>
                                             </div>
+                                        </div>
+
+                                        {/* Content Expiry Date — row 3, col 1 */}
+                                        <div className="space-y-1">
+                                            <Label className="text-xs">Content Expiry Date</Label>
+                                            <input
+                                                type="date"
+                                                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                                                value={contentExpiresAt ? new Date(contentExpiresAt).toISOString().split('T')[0] : ''}
+                                                onChange={e => setContentExpiresAt(e.target.value ? new Date(e.target.value).toISOString() : null)}
+                                            />
+                                            <p className="text-[10px] text-muted-foreground">
+                                                When this training's content expires and is auto-archived. Per-user deadlines are set separately when assigning.
+                                            </p>
                                         </div>
                                     </div>
                                 </CardContent>

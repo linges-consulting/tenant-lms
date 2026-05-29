@@ -19,7 +19,7 @@ from app.models.chapter import Chapter, ContentType
 from app.models.enrollment import Enrollment
 from app.models.assignment import TrainingAssignment
 from app.models.collaborator import TrainingCollaborator
-from app.models.progress import UserProgress
+from app.models.progress import UserProgress, ProgressStatus
 from tests.conftest import override_current_user, make_user_auth
 
 
@@ -1044,12 +1044,12 @@ async def test_unpublish_resets_learner_progress(client, db_session):
         training_version_id=1,
     )
     progress = UserProgress(
-        id=str(uuid.uuid4()),
         tenant_id=tenant_id,
         user_id=learner_id,
         training_id=training.id,
         chapter_id=str(uuid.uuid4()),
-        is_completed=True,
+        status=ProgressStatus.COMPLETED,
+        training_version_id=1,
     )
     db_session.add(enrollment)
     db_session.add(progress)
@@ -2019,11 +2019,10 @@ async def test_audit_collaborator_sees_all_events(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_audit_manager_sees_only_state_transitions(client, db_session):
+async def test_audit_manager_sees_all_events(client, db_session):
     """
-    BR-309a: Business Manager who is NOT the owner or collaborator sees only
-    state-transition events (MARK_READY, SEND_TO_DRAFT, PUBLISH, UNPUBLISH, ARCHIVE).
-    Non-state events like COLLABORATOR_ADDED must be filtered out.
+    Updated: Business Manager who is NOT the owner or collaborator now sees ALL
+    audit entries (state transitions AND other events like COLLABORATOR_ADDED).
     """
     tenant_id = str(uuid.uuid4())
     owner = _make_creator(tenant_id)
@@ -2048,7 +2047,7 @@ async def test_audit_manager_sees_only_state_transitions(client, db_session):
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
         actions = [e["action"] for e in resp.json()]
         assert "MARK_READY" in actions, "Manager should see MARK_READY (state transition)"
-        assert "COLLABORATOR_ADDED" not in actions, "Manager must NOT see COLLABORATOR_ADDED"
+        assert "COLLABORATOR_ADDED" in actions, "Manager should now see all events including COLLABORATOR_ADDED"
     finally:
         _clear_overrides()
 
@@ -2076,9 +2075,9 @@ async def test_audit_non_collaborator_creator_forbidden(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_audit_manager_sees_all_state_transition_actions(client, db_session):
+async def test_audit_manager_sees_all_action_types(client, db_session):
     """
-    BR-309a: Manager sees all five state-transition action types and nothing else.
+    Updated: Manager sees ALL action types — both state-transition and non-state events.
     """
     tenant_id = str(uuid.uuid4())
     owner = _make_creator(tenant_id)
@@ -2105,8 +2104,9 @@ async def test_audit_manager_sees_all_state_transition_actions(client, db_sessio
         returned_actions = set(e["action"] for e in resp.json())
         for a in state_actions:
             assert a in returned_actions, f"Manager should see {a}"
+        # Managers now see ALL events, including non-state ones
         for a in non_state_actions:
-            assert a not in returned_actions, f"Manager must NOT see {a}"
+            assert a in returned_actions, f"Manager should now see {a}"
     finally:
         _clear_overrides()
 
@@ -2127,5 +2127,214 @@ async def test_audit_training_not_found(client, db_session):
     try:
         resp = await client.get(f"/api/v1/trainings/{uuid.uuid4()}/audit")
         assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-QZ-SC-01: Quiz score is rounded to whole number
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_quiz_score_is_whole_number(client, db_session):
+    """
+    Submitting a quiz with 2/3 correct answers must return score=67 (not 66.7).
+    """
+    from app.models.chapter import Chapter, ContentType
+    import json
+
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    # Create training + quiz chapter with 3 questions
+    q1_id = str(uuid.uuid4())
+    q2_id = str(uuid.uuid4())
+    q3_id = str(uuid.uuid4())
+    opt_correct = str(uuid.uuid4())
+    opt_wrong = str(uuid.uuid4())
+    training = Training(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, title="Quiz Score Test",
+        category="test", structure_type="flat", is_published=True,
+        created_by_id=creator.id, requires_certificate=False,
+    )
+    chapter = Chapter(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, training_id=training.id,
+        title="Quiz", content_type=ContentType.QUIZ, sequence_order=1,
+        content_data={
+            "passing_score": 80,
+            "max_attempts": 0,
+            "questions": [
+                {"id": q1_id, "text": "Q1", "type": "multiple_choice",
+                 "options": [{"id": opt_correct, "text": "A"}, {"id": opt_wrong, "text": "B"}],
+                 "correct_option_ids": [opt_correct]},
+                {"id": q2_id, "text": "Q2", "type": "multiple_choice",
+                 "options": [{"id": opt_correct, "text": "A"}, {"id": opt_wrong, "text": "B"}],
+                 "correct_option_ids": [opt_correct]},
+                {"id": q3_id, "text": "Q3", "type": "multiple_choice",
+                 "options": [{"id": opt_correct, "text": "A"}, {"id": opt_wrong, "text": "B"}],
+                 "correct_option_ids": [opt_correct]},
+            ],
+        },
+    )
+    db_session.add(training)
+    db_session.add(chapter)
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        # Submit 2 correct, 1 wrong → 2/3 = 66.67% → should round to 67
+        resp = await client.post(
+            f"/api/v1/trainings/{training.id}/chapters/{chapter.id}/submit-quiz",
+            json={"answers": [
+                {"question_id": q1_id, "selected_option_ids": [opt_correct]},
+                {"question_id": q2_id, "selected_option_ids": [opt_correct]},
+                {"question_id": q3_id, "selected_option_ids": [opt_wrong]},
+            ]},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        score = data["score"]
+        assert isinstance(score, int), f"Score must be int, got {type(score)}: {score}"
+        assert score == 67, f"Expected 67, got {score}"
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-CC-01: Completion count endpoint returns correct count
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_completion_count_returns_zero_when_no_completions(client, db_session):
+    """GET /completion-count returns 0 when no enrollments are completed."""
+    tenant_id = str(uuid.uuid4())
+    manager = _make_manager(tenant_id)
+    training = Training(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, title="Count Test",
+        category="test", structure_type="flat", is_published=True,
+        created_by_id=str(uuid.uuid4()), requires_certificate=False,
+    )
+    db_session.add(training)
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.get(f"/api/v1/trainings/{training.id}/completion-count")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["completed_count"] == 0
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_completion_count_counts_completed_enrollments(client, db_session):
+    """GET /completion-count reflects the number of completed enrollments."""
+    from app.models.enrollment import Enrollment
+
+    tenant_id = str(uuid.uuid4())
+    manager = _make_manager(tenant_id)
+    training = Training(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, title="Count Test 2",
+        category="test", structure_type="flat", is_published=True,
+        created_by_id=str(uuid.uuid4()), requires_certificate=False,
+    )
+    db_session.add(training)
+    # Add 2 completed + 1 incomplete enrollment
+    for _ in range(2):
+        db_session.add(Enrollment(
+            id=str(uuid.uuid4()), tenant_id=tenant_id, training_id=training.id,
+            user_id=str(uuid.uuid4()), is_completed=True,
+        ))
+    db_session.add(Enrollment(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, training_id=training.id,
+        user_id=str(uuid.uuid4()), is_completed=False,
+    ))
+    await db_session.commit()
+
+    _set_user(manager)
+    try:
+        resp = await client.get(f"/api/v1/trainings/{training.id}/completion-count")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["completed_count"] == 2
+    finally:
+        _clear_overrides()
+
+
+# ---------------------------------------------------------------------------
+# T-CL-01: Clone training creates a deep copy
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_clone_training_creates_deep_copy(client, db_session):
+    """POST /clone creates a new draft training with cloned modules and chapters."""
+    from app.models.module import Module
+    from app.models.chapter import Chapter, ContentType
+
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = Training(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, title="Original",
+        category="test", structure_type="flat", is_published=False,
+        created_by_id=creator.id, requires_certificate=False,
+    )
+    module = Module(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, training_id=training.id,
+        title="Module 1", sequence_order=1,
+    )
+    chapter = Chapter(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, training_id=training.id,
+        module_id=module.id, title="Chapter 1", content_type=ContentType.RICH_TEXT,
+        sequence_order=1, content_data={"text": "Hello"},
+    )
+    db_session.add_all([training, module, chapter])
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/clone")
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        assert data["title"] == "Copy of Original"
+        assert data["is_published"] is False
+        assert data["is_ready"] is False
+        assert data["id"] != training.id
+        # Owner of clone is the requester
+        assert data["created_by_id"] == creator.id
+    finally:
+        _clear_overrides()
+
+
+@pytest.mark.asyncio
+async def test_clone_training_does_not_copy_enrollments(client, db_session):
+    """Cloned training has zero enrollments — only the source training's enrollments exist."""
+    from sqlalchemy import select as sa_select
+
+    tenant_id = str(uuid.uuid4())
+    creator = _make_creator(tenant_id)
+
+    training = Training(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, title="With Enrollments",
+        category="test", structure_type="flat", is_published=True,
+        created_by_id=creator.id, requires_certificate=False,
+    )
+    db_session.add(training)
+    db_session.add(Enrollment(
+        id=str(uuid.uuid4()), tenant_id=tenant_id, training_id=training.id,
+        user_id=str(uuid.uuid4()), is_completed=True,
+    ))
+    await db_session.commit()
+
+    _set_user(creator)
+    try:
+        resp = await client.post(f"/api/v1/trainings/{training.id}/clone")
+        assert resp.status_code == 201, resp.text
+        clone_id = resp.json()["id"]
+
+        # Verify clone has no enrollments
+        result = await db_session.execute(
+            sa_select(Enrollment).where(Enrollment.training_id == clone_id)
+        )
+        assert result.scalars().all() == [], "Clone must have no enrollments"
     finally:
         _clear_overrides()

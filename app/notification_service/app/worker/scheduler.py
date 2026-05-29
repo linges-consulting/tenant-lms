@@ -89,10 +89,27 @@ async def send_overdue_reminders() -> None:
         )
 
 
+async def auto_archive_expired_trainings() -> None:
+    """Call core-service to archive trainings whose expiry date has passed."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{settings.CORE_SERVICE_URL}/api/v1/trainings/internal/auto-archive-expired",
+                headers={"X-Internal-Api-Key": settings.INTERNAL_API_KEY},
+            )
+            resp.raise_for_status()
+            archived = resp.json()
+            logger.info("Auto-archived %d expired trainings", len(archived))
+            # TODO: send in-app notifications to managers per tenant
+    except Exception:
+        logger.exception("auto_archive_expired_trainings failed")
+
+
 def create_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(send_due_date_reminders, "cron", hour=8, minute=0, id="reminder_14d", args=[14])
     scheduler.add_job(send_due_date_reminders, "cron", hour=8, minute=5, id="reminder_7d", args=[7])
     scheduler.add_job(send_due_date_reminders, "cron", hour=8, minute=10, id="reminder_1d", args=[1])
     scheduler.add_job(send_overdue_reminders, "cron", hour=9, minute=0, id="overdue_daily")
+    scheduler.add_job(auto_archive_expired_trainings, "cron", hour=0, minute=0, id="auto_archive_expired_trainings")
     return scheduler

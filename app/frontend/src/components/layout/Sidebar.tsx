@@ -6,7 +6,7 @@ import {
   Users, LayoutDashboard, Award,
   BarChart3, UserCheck, BookOpen,
   GraduationCap, Layers, ClipboardList,
-  FileText, Activity, RefreshCw, Globe,
+  FileText, Activity, RefreshCw, Globe, Tag,
 } from 'lucide-react';
 import { UserDropdown } from './UserDropdown';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
@@ -51,6 +51,7 @@ interface NavItem {
 // Learner portal
 const LEARNING_NAV: NavItem[] = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/dashboard/my-courses', icon: BookOpen, label: 'My Trainings' },
   { to: '/dashboard/certificates', icon: Award, label: 'Certificates' },
 ];
 
@@ -67,6 +68,7 @@ const MANAGEMENT_NAV: NavItem[] = [
   { to: '/manage/groups', icon: UserCheck, label: 'Groups' },
   { to: '/manage/reports', icon: BarChart3, label: 'Reports' },
   { to: '/manage/publish', icon: Globe, label: 'Review & Publish' },
+  { to: '/manage/categories', icon: Tag, label: 'Categories' },
 ];
 
 // Training Creator only
@@ -214,20 +216,18 @@ function ServiceHealthPanel({ healthStatus, onRefresh }: ServiceHealthPanelProps
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <div className="flex items-center justify-between">
-              <DialogTitle className="flex items-center gap-2">
-                <Activity className="w-4 h-4" />
-                System Health
-              </DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              <Activity className="w-4 h-4" />
+              System Health
               <button
                 onClick={onRefresh}
-                className="p-1 rounded hover:bg-accent transition-colors"
+                className="p-1 rounded hover:bg-accent transition-colors ml-1"
                 title="Refresh health status"
                 aria-label="Refresh health status"
               >
                 <RefreshCw className="w-3.5 h-3.5 text-muted-foreground" />
               </button>
-            </div>
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 pt-1">
             {SERVICES.map(({ key, label, description }) => {

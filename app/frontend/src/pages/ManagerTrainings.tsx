@@ -24,6 +24,7 @@ import {
     SendHorizonal,
     RotateCcw,
     Trash2,
+    Copy,
 } from 'lucide-react';
 import { managerTrainingsApi } from '../api/trainings';
 import {
@@ -85,6 +86,23 @@ export const ManagerTrainings: React.FC = () => {
         } catch (error) {
             console.error('Failed to archive training', error);
             toast.error('Failed to archive training.');
+        }
+    };
+
+    // Clone state
+    const [cloningId, setCloningId] = useState<string | null>(null);
+
+    const handleCloneTraining = async (training: Training) => {
+        setCloningId(training.id);
+        try {
+            const cloned = await managerTrainingsApi.cloneTraining(training.id);
+            setTrainings(prev => [cloned, ...prev]);
+            toast.success(`"${cloned.title}" created as a draft`);
+            navigate(`/manage/courses/${cloned.id}`);
+        } catch {
+            toast.error('Failed to clone training');
+        } finally {
+            setCloningId(null);
         }
     };
 
@@ -235,7 +253,7 @@ export const ManagerTrainings: React.FC = () => {
 
     const canEdit = (training: Training) => {
         const collab = isCollaboratorOnly(training);
-        return isCreator && !training.is_published && !training.is_archived && (canManageLifecycle(training) || collab);
+        return isCreator && !training.is_ready && !training.is_published && !training.is_archived && (canManageLifecycle(training) || collab);
     };
 
     const canMarkReadyAction = (training: Training) =>
@@ -450,6 +468,14 @@ export const ManagerTrainings: React.FC = () => {
                                                             </DropdownMenuItem>
                                                         </>
                                                     )}
+                                                    <DropdownMenuSeparator />
+                                                    <DropdownMenuItem
+                                                        onClick={() => handleCloneTraining(training)}
+                                                        disabled={cloningId === training.id}
+                                                    >
+                                                        <Copy className="mr-2 h-4 w-4" />
+                                                        {cloningId === training.id ? 'Cloning…' : 'Clone Training'}
+                                                    </DropdownMenuItem>
                                                     {canArchiveAction(training) && (
                                                         <>
                                                             <DropdownMenuSeparator />

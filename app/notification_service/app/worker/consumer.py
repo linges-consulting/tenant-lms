@@ -145,6 +145,25 @@ async def handle_event(db: AsyncSession, event: dict):
                 notification_type="info",
             ))
 
+    elif event_type == "MANAGER_SENT_TO_DRAFT":
+        recipient_id = payload.get("recipient_user_id")
+        if recipient_id:
+            notified_user_id = recipient_id
+            training_title = payload.get("training_title", "a training")
+            comment = payload.get("comment", "").strip()
+            message = f"The manager sent \"{training_title}\" back to draft."
+            if comment:
+                message += f" Reason: {comment}"
+            db.add(Notification(
+                id=str(uuid.uuid4()),
+                event_id=event_id,
+                user_id=recipient_id,
+                tenant_id=payload["tenant_id"],
+                title="Training Sent Back to Draft",
+                message=message,
+                notification_type="warning",
+            ))
+
     elif event_type == "COLLABORATOR_ADDED":
         # In-app to the newly added collaborator (BR-302a)
         collaborator_id = payload.get("collaborator_user_id")

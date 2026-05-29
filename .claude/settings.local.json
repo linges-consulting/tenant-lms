@@ -84,7 +84,12 @@
       "mcp__plugin_playwright_playwright__browser_file_upload",
       "mcp__plugin_playwright_playwright__browser_evaluate",
       "mcp__plugin_playwright_playwright__browser_handle_dialog",
-      "mcp__plugin_playwright_playwright__browser_close"
+      "mcp__plugin_playwright_playwright__browser_close",
+      "Bash(xargs ls -1)",
+      "Bash(find *)",
+      "Bash(grep -v '^$')",
+      "Bash(xargs -I {} sh -c 'echo \"=== {} ===\" && head -25 \"{}\"')",
+      "Bash(xargs ls -la)"
     ]
   },
   "enabledPlugins": {}

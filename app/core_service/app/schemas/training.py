@@ -1,3 +1,4 @@
+from datetime import datetime
 from pydantic import BaseModel, ConfigDict, computed_field, model_validator, field_validator
 from typing import Optional, List, Any
 from app.schemas.module import ModuleWithChapters
@@ -17,6 +18,7 @@ class TrainingBase(BaseModel):
     is_archived: Optional[bool] = False
     is_active: Optional[bool] = True
     is_ready: Optional[bool] = False
+    content_expires_at: Optional[datetime] = None
 
 class TrainingCollaboratorBase(BaseModel):
     user_id: str
@@ -85,6 +87,7 @@ class Training(TrainingInDBBase):
     status: str = "not_started"  # not_started, in_progress, completed, expired
     certificate_id: Optional[str] = None
     completed_at: Optional[Any] = None
+    due_date: Optional[datetime] = None  # per-user assignment due_date (manager-set)
 
     @computed_field
     @property

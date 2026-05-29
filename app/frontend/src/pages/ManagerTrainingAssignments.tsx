@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { cn } from '../lib/utils';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Button } from '../components/ui/button';
@@ -6,6 +6,14 @@ import { Badge } from '../components/ui/badge';
 import { Checkbox } from '../components/ui/checkbox';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogDescription,
+    DialogFooter,
+} from '../components/ui/dialog';
 import {
     Search,
     Users,
@@ -18,10 +26,14 @@ import {
     UserPlus,
     ChevronDown,
     ChevronRight,
+    Pencil,
+    Check,
+    X,
 } from 'lucide-react';
 import { managerTrainingsApi, type TrainingAssignment } from '../api/trainings';
 import { userService, type User as UserType } from '../api/users';
 import { groupService, type Group } from '../api/groups';
+import { DatePicker, type DatePickerHandle } from '../components/DatePicker';
 
 export const ManagerTrainingAssignments: React.FC = () => {
     const { id: trainingId } = useParams<{ id: string }>();
@@ -30,6 +42,7 @@ export const ManagerTrainingAssignments: React.FC = () => {
     const backPath = location.pathname.includes('/publish/') ? '/manage/publish' : '/manage/courses';
 
     const [trainingTitle, setTrainingTitle] = useState('');
+    const [isPublished, setIsPublished] = useState(false);
     const [activeAssignments, setActiveAssignments] = useState<TrainingAssignment[]>([]);
     const [allUsers, setAllUsers] = useState<UserType[]>([]);
     const [allGroups, setAllGroups] = useState<Group[]>([]);
@@ -42,6 +55,28 @@ export const ManagerTrainingAssignments: React.FC = () => {
     const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
     const [groupMembers, setGroupMembers] = useState<Record<string, UserType[]>>({});
     const [allAssignedUserIds, setAllAssignedUserIds] = useState<Set<string>>(new Set());
+
+    // Confirmation dialog state
+    const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+
+    // Inline due-date edit state
+    const [editingAssignmentId, setEditingAssignmentId] = useState<string | null>(null);
+    const [editingDueDate, setEditingDueDate] = useState('');
+    const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+    // DatePicker refs for imperative validation on submit
+    const dueDatePickerRef = useRef<DatePickerHandle>(null);
+    const editDatePickerRef = useRef<DatePickerHandle>(null);
+
+    // Published-training modification guard
+    type PendingAction = {
+        fn: () => void;
+        type: 'delete' | 'due_date';
+        assigneeName: string;
+        assigneeType: 'User' | 'Group';
+        newDueDate?: string; // YYYY-MM-DD, only for due_date type
+    };
+    const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
 
     useEffect(() => {
         if (trainingId) loadData();
@@ -61,7 +96,7 @@ export const ManagerTrainingAssignments: React.FC = () => {
             setAllUsers(users);
             setAllGroups(groups);
             const t = trainings.find(tr => tr.id === trainingId);
-            if (t) setTrainingTitle(t.title);
+            if (t) { setTrainingTitle(t.title); setIsPublished(t.is_published); }
 
             // Fetch members for all assigned groups to handle filtering
             const assignedGroupIds = assignments
@@ -103,6 +138,7 @@ export const ManagerTrainingAssignments: React.FC = () => {
     const handleAssign = async () => {
         if (selectedUserIds.length === 0 && selectedGroupIds.length === 0) return;
         setIsSaving(true);
+        setShowConfirmDialog(false);
         try {
             await managerTrainingsApi.bulkAssign(trainingId!, {
                 user_ids: selectedUserIds,
@@ -120,18 +156,68 @@ export const ManagerTrainingAssignments: React.FC = () => {
         }
     };
 
-    const handleDeleteAssignment = async (assignmentId: string) => {
+    const doUpdateDueDate = async (assignmentId: string) => {
+        setIsSavingEdit(true);
+        try {
+            const newDueDate = editingDueDate ? new Date(editingDueDate).toISOString() : null;
+            await managerTrainingsApi.updateAssignment(assignmentId, { due_date: newDueDate });
+            setActiveAssignments(prev =>
+                prev.map(a => a.id === assignmentId ? { ...a, due_date: newDueDate ?? undefined } : a)
+            );
+            setEditingAssignmentId(null);
+        } catch (error) {
+            console.error('Failed to update assignment', error);
+        } finally {
+            setIsSavingEdit(false);
+        }
+    };
+
+    const handleUpdateDueDate = (assignmentId: string) => {
+        const assignment = activeAssignments.find(a => a.id === assignmentId);
+        if (isPublished && assignment) {
+            setPendingAction({
+                fn: () => doUpdateDueDate(assignmentId),
+                type: 'due_date',
+                assigneeName: assignment.group_name || assignment.user_name || 'Unknown',
+                assigneeType: assignment.group_id ? 'Group' : 'User',
+                newDueDate: editingDueDate || undefined,
+            });
+        } else {
+            doUpdateDueDate(assignmentId);
+        }
+    };
+
+    const startEditDueDate = (assignment: TrainingAssignment) => {
+        setEditingAssignmentId(assignment.id);
+        setEditingDueDate(
+            assignment.due_date
+                ? new Date(assignment.due_date).toISOString().split('T')[0]
+                : ''
+        );
+    };
+
+    const doDeleteAssignment = async (assignmentId: string) => {
         try {
             await managerTrainingsApi.deleteAssignment(assignmentId);
             const deleted = activeAssignments.find(a => a.id === assignmentId);
             setActiveAssignments(prev => prev.filter(a => a.id !== assignmentId));
-            
-            // If it was a group assignment, we need to recalculate the assigned users set
-            if (deleted?.group_id) {
-                loadData(); // Easiest way to refresh the set
-            }
+            if (deleted?.group_id) loadData();
         } catch (error) {
             console.error('Failed to delete assignment', error);
+        }
+    };
+
+    const handleDeleteAssignment = (assignmentId: string) => {
+        const assignment = activeAssignments.find(a => a.id === assignmentId);
+        if (isPublished && assignment) {
+            setPendingAction({
+                fn: () => doDeleteAssignment(assignmentId),
+                type: 'delete',
+                assigneeName: assignment.group_name || assignment.user_name || 'Unknown',
+                assigneeType: assignment.group_id ? 'Group' : 'User',
+            });
+        } else {
+            doDeleteAssignment(assignmentId);
         }
     };
 
@@ -170,6 +256,13 @@ export const ManagerTrainingAssignments: React.FC = () => {
     );
 
     const selectionCount = selectedUserIds.length + selectedGroupIds.length;
+
+    const selectedUserNames = allUsers
+        .filter(u => selectedUserIds.includes(u.id))
+        .map(u => u.full_name || u.email);
+    const selectedGroupNames = allGroups
+        .filter(g => selectedGroupIds.includes(g.id))
+        .map(g => g.name);
 
     return (
         <div className="flex flex-col h-full min-h-0">
@@ -232,7 +325,7 @@ export const ManagerTrainingAssignments: React.FC = () => {
                         className="flex-1 min-h-0 flex flex-col m-0 p-6 gap-4 data-[state=inactive]:hidden"
                     >
                         {/* Search + Due Date */}
-                        <div className="flex flex-col sm:flex-row gap-4 shrink-0">
+                        <div className="flex flex-col sm:flex-row gap-4 shrink-0 sm:items-end">
                             <div className="relative flex-1">
                                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                 <input
@@ -242,15 +335,14 @@ export const ManagerTrainingAssignments: React.FC = () => {
                                     onChange={(e) => setSearchQuery(e.target.value)}
                                 />
                             </div>
-                            <div className="flex items-center gap-2 border rounded-lg px-3 py-1.5 bg-background shrink-0">
-                                <Calendar className="h-4 w-4 text-muted-foreground" />
-                                <input
-                                    type="date"
-                                    className="outline-none bg-transparent text-sm h-7"
+                            <div className="flex flex-col gap-1 shrink-0">
+                                <span className="text-xs text-muted-foreground font-medium">Due Date (Optional)</span>
+                                <DatePicker
+                                    ref={dueDatePickerRef}
                                     value={dueDate}
-                                    onChange={(e) => setDueDate(e.target.value)}
+                                    onChange={setDueDate}
+                                    align="end"
                                 />
-                                <span className="text-xs text-muted-foreground">Due Date (Optional)</span>
                             </div>
                         </div>
 
@@ -409,7 +501,11 @@ export const ManagerTrainingAssignments: React.FC = () => {
                                     : 'Select groups or employees above'}
                             </p>
                             <Button
-                                onClick={handleAssign}
+                                onClick={() => {
+                                    if (selectionCount === 0) return;
+                                    if (dueDatePickerRef.current && !dueDatePickerRef.current.validate()) return;
+                                    setShowConfirmDialog(true);
+                                }}
                                 disabled={isSaving || selectionCount === 0}
                                 className="min-w-[160px]"
                             >
@@ -479,17 +575,58 @@ export const ManagerTrainingAssignments: React.FC = () => {
                                                                 </Button>
                                                             )}
                                                         </div>
-                                                        <div className="flex items-center gap-2 mt-0.5">
+                                                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                                                             <Badge
                                                                 variant="outline"
                                                                 className="text-[9px] px-1 h-4 uppercase tracking-tighter"
                                                             >
                                                                 {assignment.group_id ? 'Group' : 'User'}
                                                             </Badge>
-                                                            {assignment.due_date && (
-                                                                <span className="text-[10px] text-amber-600 flex items-center gap-1 font-medium">
-                                                                    <Calendar className="h-3 w-3" /> Due:{' '}
-                                                                    {new Date(assignment.due_date).toLocaleDateString()}
+                                                            {editingAssignmentId === assignment.id ? (
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <DatePicker
+                                                                        ref={editDatePickerRef}
+                                                                        value={editingDueDate}
+                                                                        onChange={setEditingDueDate}
+                                                                        align="start"
+                                                                    />
+                                                                    <Button
+                                                                        size="icon"
+                                                                        variant="ghost"
+                                                                        className="h-6 w-6 text-primary hover:bg-primary/10"
+                                                                        disabled={isSavingEdit}
+                                                                        onClick={() => {
+                                                                            if (editDatePickerRef.current && !editDatePickerRef.current.validate()) return;
+                                                                            handleUpdateDueDate(assignment.id);
+                                                                        }}
+                                                                        title="Save due date"
+                                                                    >
+                                                                        {isSavingEdit ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                                                                    </Button>
+                                                                    <Button
+                                                                        size="icon"
+                                                                        variant="ghost"
+                                                                        className="h-6 w-6 text-muted-foreground hover:bg-muted"
+                                                                        onClick={() => setEditingAssignmentId(null)}
+                                                                        title="Cancel"
+                                                                    >
+                                                                        <X className="h-3 w-3" />
+                                                                    </Button>
+                                                                </div>
+                                                            ) : (
+                                                                <span
+                                                                    className={cn(
+                                                                        'text-[10px] flex items-center gap-1 font-medium cursor-pointer group/due',
+                                                                        assignment.due_date ? 'text-amber-600' : 'text-muted-foreground'
+                                                                    )}
+                                                                    onClick={() => startEditDueDate(assignment)}
+                                                                    title="Click to edit due date"
+                                                                >
+                                                                    <Calendar className="h-3 w-3" />
+                                                                    {assignment.due_date
+                                                                        ? `Due: ${new Date(assignment.due_date).toLocaleDateString()}`
+                                                                        : 'Set due date'}
+                                                                    <Pencil className="h-2.5 w-2.5 opacity-0 group-hover/due:opacity-60 transition-opacity" />
                                                                 </span>
                                                             )}
                                                             <span className="text-[10px] text-muted-foreground">
@@ -542,6 +679,140 @@ export const ManagerTrainingAssignments: React.FC = () => {
                     </TabsContent>
                 </Tabs>
             </div>
+
+            {/* Published-training modification guard dialog */}
+            <Dialog open={!!pendingAction} onOpenChange={open => { if (!open) setPendingAction(null); }}>
+                <DialogContent className="max-w-sm">
+                    <DialogHeader>
+                        <DialogTitle>
+                            {pendingAction?.type === 'delete' ? 'Remove Assignment?' : 'Update Due Date?'}
+                        </DialogTitle>
+                        <DialogDescription asChild>
+                            <div className="space-y-3 pt-1">
+                                <p className="text-sm text-muted-foreground">
+                                    <strong className="text-foreground">{trainingTitle}</strong> is live and currently
+                                    assigned to active learners. This change takes effect immediately.
+                                </p>
+
+                                {/* Action summary card */}
+                                <div className="rounded-lg border bg-muted/30 px-3 py-2.5 space-y-1.5 text-sm">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-muted-foreground">Action</span>
+                                        <span className={cn('font-medium', pendingAction?.type === 'delete' ? 'text-destructive' : 'text-foreground')}>
+                                            {pendingAction?.type === 'delete' ? 'Remove assignment' : 'Change due date'}
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-muted-foreground">{pendingAction?.assigneeType}</span>
+                                        <span className="font-medium">{pendingAction?.assigneeName}</span>
+                                    </div>
+                                    {pendingAction?.type === 'due_date' && (
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-muted-foreground">New due date</span>
+                                            <span className="font-medium text-amber-600">
+                                                {pendingAction.newDueDate
+                                                    ? new Date(pendingAction.newDueDate).toLocaleDateString()
+                                                    : 'None (cleared)'}
+                                            </span>
+                                        </div>
+                                    )}
+                                    {pendingAction?.type === 'delete' && (
+                                        <p className="text-[11px] text-destructive/80 pt-0.5">
+                                            The learner or group will immediately lose access to this training.
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setPendingAction(null)}>
+                            Cancel
+                        </Button>
+                        <Button
+                            variant={pendingAction?.type === 'delete' ? 'destructive' : 'default'}
+                            onClick={() => {
+                                pendingAction?.fn();
+                                setPendingAction(null);
+                            }}
+                        >
+                            {pendingAction?.type === 'delete' ? 'Remove Assignment' : 'Update Due Date'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* Bulk Assign Confirmation Dialog */}
+            <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Confirm Assignment</DialogTitle>
+                        <DialogDescription>
+                            Review the details before assigning this training.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-4 py-2">
+                        {selectedGroupNames.length > 0 && (
+                            <div>
+                                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                                    Groups ({selectedGroupNames.length})
+                                </p>
+                                <div className="space-y-1">
+                                    {selectedGroupNames.map(name => (
+                                        <div key={name} className="flex items-center gap-2 text-sm">
+                                            <Users className="h-3.5 w-3.5 text-primary shrink-0" />
+                                            {name}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {selectedUserNames.length > 0 && (
+                            <div>
+                                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                                    Employees ({selectedUserNames.length})
+                                </p>
+                                <div className="space-y-1 max-h-40 overflow-y-auto">
+                                    {selectedUserNames.map(name => (
+                                        <div key={name} className="flex items-center gap-2 text-sm">
+                                            <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                            {name}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="rounded-lg border bg-muted/30 px-3 py-2.5 space-y-1">
+                            <div className="flex items-center justify-between text-sm">
+                                <span className="text-muted-foreground">Training</span>
+                                <span className="font-medium">{trainingTitle}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                                <span className="text-muted-foreground">Due Date</span>
+                                <span className={cn('font-medium', dueDate ? 'text-amber-600' : 'text-muted-foreground')}>
+                                    {dueDate ? new Date(dueDate).toLocaleDateString() : 'None'}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setShowConfirmDialog(false)}>
+                            Cancel
+                        </Button>
+                        <Button onClick={handleAssign} disabled={isSaving}>
+                            {isSaving ? (
+                                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Assigning...</>
+                            ) : (
+                                <><UserPlus className="mr-2 h-4 w-4" /> Confirm Assignment</>
+                            )}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 };

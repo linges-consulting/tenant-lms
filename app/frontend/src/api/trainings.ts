@@ -61,6 +61,8 @@ export interface Training {
     completed_at?: string;
     collaborators: TrainingCollaborator[];
     structure_type?: 'flat' | 'modular';
+    content_expires_at?: string | null;  // creator-set content expiry (auto-archive trigger)
+    due_date?: string | null;             // per-user assignment due date (manager-set)
 }
 
 export interface TrainingHistorySnapshot {
@@ -124,6 +126,20 @@ export interface QuizResult {
     correct_answers?: Record<string, string[]>;
 }
 
+export interface QuizAttemptsSummaryUser {
+    user_id: string;
+    name: string;
+    email: string;
+    attempts: number;
+}
+
+export interface QuizAttemptsSummaryChapter {
+    chapter_id: string;
+    chapter_title: string;
+    max_attempts: number;
+    users_at_limit: QuizAttemptsSummaryUser[];
+}
+
 // Learner endpoints
 export const trainingsApi = {
     getPublishedTrainings: (filters?: { category?: string; status?: string }) =>
@@ -165,6 +181,9 @@ export const managerTrainingsApi = {
     unpublishTraining: (id: string) =>
         apiClient.post<Training>(`/trainings/${id}/unpublish`),
 
+    getTrainingCompletionCount: (id: string) =>
+        apiClient.get<{ completed_count: number; assigned_count: number }>(`/trainings/${id}/completion-count`),
+
     getTrainingHistory: (id: string) =>
         apiClient.get<TrainingHistorySnapshot[]>(`/trainings/${id}/history`),
 
@@ -198,6 +217,9 @@ export const managerTrainingsApi = {
     deleteAssignment: (assignmentId: string) =>
         apiClient.delete(`/trainings/assignments/${assignmentId}`),
 
+    updateAssignment: (assignmentId: string, data: { due_date: string | null }) =>
+        apiClient.patch<TrainingAssignment>(`/trainings/assignments/${assignmentId}`, data),
+
     reorderModules: (trainingId: string, items: { id: string, sequence_order: number }[]) =>
         apiClient.post(`/trainings/${trainingId}/modules/reorder`, { items }),
 
@@ -219,6 +241,9 @@ export const managerTrainingsApi = {
     sendToDraft: (id: string) =>
         apiClient.post<Training>(`/trainings/${id}/send-to-draft`),
 
+    managerRevertToDraft: (id: string, comment: string) =>
+        apiClient.post<Training>(`/trainings/${id}/manager-revert-to-draft`, { comment }),
+
     archiveTraining: (id: string) =>
         apiClient.post<{ status: string, message: string }>(`/trainings/${id}/archive`),
 
@@ -230,6 +255,15 @@ export const managerTrainingsApi = {
 
     removeCollaborator: (id: string, userId: string) =>
         apiClient.delete(`/trainings/${id}/collaborators/${userId}`),
+
+    cloneTraining: (trainingId: string) =>
+        apiClient.post<Training>(`/trainings/${trainingId}/clone`),
+
+    getQuizAttemptsSummary: (trainingId: string) =>
+        apiClient.get<QuizAttemptsSummaryChapter[]>(`/trainings/${trainingId}/quiz-attempts-summary`),
+
+    resetUserQuizAttempts: (trainingId: string, chapterId: string, userId: string) =>
+        apiClient.post<{ message: string }>(`/trainings/${trainingId}/chapters/${chapterId}/quiz/reset/${userId}`),
 
     exportScorm: async (trainingId: string, title: string) => {
         const blob = await apiClient.getBlob(`/trainings/${trainingId}/export-scorm`);
