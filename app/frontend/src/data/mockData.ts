@@ -21,7 +21,8 @@ export const TENANT_INFO = {
 };
 
 export const LEARNER_NAV_LINKS = [
-    { label: "My Trainings", href: "/dashboard", activeMatch: "/dashboard", icon: "BookOpen" },
+    { label: "Dashboard", href: "/dashboard", activeMatch: "/dashboard", icon: "LayoutDashboard" },
+    { label: "My Trainings", href: "/dashboard/my-courses", activeMatch: "/dashboard/my-courses", icon: "BookOpen" },
     { label: "Certificates", href: "/dashboard/certificates", activeMatch: "/dashboard/certificates", icon: "Award" },
 ];
 
@@ -33,6 +34,7 @@ export const MANAGER_NAV_LINKS = [
     { label: "Groups", href: "/manage/groups", activeMatch: "/manage/groups", icon: "Users" },
     { label: "Reports", href: "/manage/reports", activeMatch: "/manage/reports", icon: "Activity" },
     { label: "Certificates", href: "/manage/certificates", activeMatch: "/manage/certificates", icon: "Award" },
+    { label: "Categories", href: "/manage/categories", activeMatch: "/manage/categories", icon: "Tag" },
 ];
 
 export const LEARNER_METRICS = [

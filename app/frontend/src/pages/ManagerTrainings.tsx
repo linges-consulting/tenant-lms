@@ -24,6 +24,7 @@ import {
     SendHorizonal,
     RotateCcw,
     Trash2,
+    Copy,
 } from 'lucide-react';
 import { managerTrainingsApi } from '../api/trainings';
 import {
@@ -46,6 +47,7 @@ import {
 } from "../components/ui/alert-dialog";
 import { ManageEditorsModal } from '../components/ManageEditorsModal';
 import type { Training } from '../api/trainings';
+import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/auth-context';
 import { toast } from 'sonner';
 
@@ -85,6 +87,23 @@ export const ManagerTrainings: React.FC = () => {
         } catch (error) {
             console.error('Failed to archive training', error);
             toast.error('Failed to archive training.');
+        }
+    };
+
+    // Clone state
+    const [cloningId, setCloningId] = useState<string | null>(null);
+
+    const handleCloneTraining = async (training: Training) => {
+        setCloningId(training.id);
+        try {
+            const cloned = await managerTrainingsApi.cloneTraining(training.id);
+            setTrainings(prev => [cloned, ...prev]);
+            toast.success(`"${cloned.title}" created as a draft`);
+            navigate(`/manage/courses/${cloned.id}`);
+        } catch {
+            toast.error('Failed to clone training');
+        } finally {
+            setCloningId(null);
         }
     };
 
@@ -235,7 +254,7 @@ export const ManagerTrainings: React.FC = () => {
 
     const canEdit = (training: Training) => {
         const collab = isCollaboratorOnly(training);
-        return isCreator && !training.is_published && !training.is_archived && (canManageLifecycle(training) || collab);
+        return isCreator && !training.is_ready && !training.is_published && !training.is_archived && (canManageLifecycle(training) || collab);
     };
 
     const canMarkReadyAction = (training: Training) =>
@@ -412,9 +431,28 @@ export const ManagerTrainings: React.FC = () => {
                         </TableHeader>
                         <TableBody>
                             {filteredTrainings.map((training) => (
-                                <TableRow key={training.id} className="hover:bg-muted/30 transition-colors group">
+                                <TableRow
+                                    key={training.id}
+                                    className={cn(
+                                        'transition-colors group',
+                                        training.is_published
+                                            ? 'bg-muted/30 opacity-60 hover:opacity-80'
+                                            : 'hover:bg-muted/30',
+                                    )}
+                                >
                                     <TableCell className="pl-4 w-[50px]">
-                                        {hasDropdownActions(training) && (
+                                        {training.is_published ? (
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                                                disabled={cloningId === training.id}
+                                                onClick={() => handleCloneTraining(training)}
+                                            >
+                                                <Copy className="h-3.5 w-3.5 mr-1" />
+                                                {cloningId === training.id ? 'Cloning…' : 'Clone'}
+                                            </Button>
+                                        ) : hasDropdownActions(training) && (
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
                                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary">
@@ -450,6 +488,14 @@ export const ManagerTrainings: React.FC = () => {
                                                             </DropdownMenuItem>
                                                         </>
                                                     )}
+                                                    <DropdownMenuSeparator />
+                                                    <DropdownMenuItem
+                                                        onClick={() => handleCloneTraining(training)}
+                                                        disabled={cloningId === training.id}
+                                                    >
+                                                        <Copy className="mr-2 h-4 w-4" />
+                                                        {cloningId === training.id ? 'Cloning…' : 'Clone Training'}
+                                                    </DropdownMenuItem>
                                                     {canArchiveAction(training) && (
                                                         <>
                                                             <DropdownMenuSeparator />
@@ -487,7 +533,15 @@ export const ManagerTrainings: React.FC = () => {
                                             <div className="w-10 h-10 rounded bg-muted flex items-center justify-center text-muted-foreground">
                                                 <FileText className="w-5 h-5" />
                                             </div>
-                                            <span className="group-hover:text-primary transition-colors cursor-pointer" onClick={() => navigate(`/manage/courses/${training.id}`)}>
+                                            <span
+                                                className={cn(
+                                                    'transition-colors',
+                                                    training.is_published
+                                                        ? 'text-muted-foreground'
+                                                        : 'group-hover:text-primary cursor-pointer',
+                                                )}
+                                                onClick={training.is_published ? undefined : () => navigate(`/manage/courses/${training.id}`)}
+                                            >
                                                 {training.title}
                                             </span>
                                         </div>

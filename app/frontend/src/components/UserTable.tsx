@@ -792,12 +792,13 @@ export const UserTable: React.FC<UserTableProps> = ({
                                 return (
                                     <TableRow
                                         key={`${user.id}-${tenant?.id || index}`}
-                                        className="hover:bg-muted/30 group"
+                                        className={cn('hover:bg-muted/30 group', status !== 'pending' ? 'cursor-pointer' : '')}
+                                        onClick={() => { if (status !== 'pending') navigate(`/profile/${user.username || user.id}`); }}
                                     >
                                         <TableCell className="pl-4 w-[50px]">
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted transition-all">
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-muted transition-all" onClick={e => e.stopPropagation()}>
                                                         <span className="sr-only">Open menu</span>
                                                         <MoreVertical className="h-4 w-4" />
                                                     </Button>

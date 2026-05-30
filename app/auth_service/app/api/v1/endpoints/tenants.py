@@ -32,7 +32,7 @@ class InternalTenantBranding(BaseModel):
     secondary_color: str
 
 @router.get("/admin/metrics")
-@cache_response("admin_metrics", expire=600)
+@cache_response("admin_metrics", expire=settings.CACHE_TTL_MEDIUM)
 async def get_admin_metrics(
     db: Annotated[AsyncSession, Depends(deps.get_db)],
     current_sysadmin: Annotated[User, Depends(deps.get_sysadmin)],
@@ -97,7 +97,7 @@ async def get_admin_metrics(
     ]
 
 @router.get("", response_model=list[TenantSchema])
-@cache_response("tenant_list", expire=1800)
+@cache_response("tenant_list", expire=settings.CACHE_TTL_LONG)
 async def list_tenants(
     db: Annotated[AsyncSession, Depends(deps.get_db)],
     current_sysadmin: Annotated[User, Depends(deps.get_sysadmin)],

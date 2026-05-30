@@ -1,52 +1,67 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { managerTrainingsApi, type TrainingAuditLog } from "../api/trainings";
-import { 
-    Clock, 
-    PlusCircle, 
-    Edit, 
-    CheckCircle, 
-    XCircle, 
-    Trash2, 
-    FileText, 
-    UserMinus, 
+import {
+    Clock,
+    PlusCircle,
+    Edit,
+    CheckCircle,
+    XCircle,
+    Trash2,
+    FileText,
+    UserMinus,
     UserPlus,
     Archive,
     RotateCcw,
-    Layout
+    Layout,
+    ChevronDown
 } from "lucide-react";
 import { ScrollArea } from "./ui/scroll-area";
 import { Loader2 } from "lucide-react";
+import { cn } from "../lib/utils";
 
 interface TrainingAuditTimelineProps {
     trainingId: string;
     refreshTrigger?: number;
 }
 
-export const TrainingAuditTimeline: React.FC<TrainingAuditTimelineProps> = ({ 
+export const TrainingAuditTimeline: React.FC<TrainingAuditTimelineProps> = ({
     trainingId,
     refreshTrigger = 0
 }) => {
     const [logs, setLogs] = useState<TrainingAuditLog[]>([]);
     const [isLoading, setIsLoading] = useState(false);
+    const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
-    useEffect(() => {
-        if (trainingId) {
-            loadAudit();
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [trainingId, refreshTrigger]);
-
-    const loadAudit = async () => {
+    const loadAudit = useCallback(async () => {
         setIsLoading(true);
         try {
             const data = await managerTrainingsApi.getTrainingAudit(trainingId);
             setLogs(data);
+            setExpandedIds(new Set());
         } catch (error) {
             console.error("Failed to load audit logs", error);
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [trainingId]);
+
+    useEffect(() => {
+        if (trainingId) {
+            loadAudit();
+        }
+    }, [trainingId, refreshTrigger, loadAudit]);
+
+    const toggleExpanded = useCallback((id: string) => {
+        setExpandedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) {
+                next.delete(id);
+            } else {
+                next.add(id);
+            }
+            return next;
+        });
+    }, []);
 
     const getActionIcon = (action: string) => {
         switch (action) {
@@ -67,8 +82,10 @@ export const TrainingAuditTimeline: React.FC<TrainingAuditTimelineProps> = ({
             case 'DELETE_CHAPTER':
                 return <Trash2 className="h-4 w-4 text-destructive" />;
             case 'ADD_COLLABORATOR':
+            case 'COLLABORATOR_ADDED':
                 return <UserPlus className="h-4 w-4 text-primary" />;
             case 'REMOVE_COLLABORATOR':
+            case 'COLLABORATOR_REMOVED':
                 return <UserMinus className="h-4 w-4 text-destructive" />;
             case 'ARCHIVE_TRAINING':
                 return <Archive className="h-4 w-4 text-muted-foreground" />;
@@ -117,53 +134,79 @@ export const TrainingAuditTimeline: React.FC<TrainingAuditTimelineProps> = ({
                     <div className="absolute left-[1.35rem] top-8 bottom-8 w-[2px] bg-border/50" />
 
                     <div className="space-y-8 relative">
-                        {logs.map((log) => (
-                            <div key={log.id} className="relative pl-10 group">
-                                {/* Dot Icon */}
-                                <div className="absolute left-[-0.65rem] top-0 w-8 h-8 rounded-full border-4 border-background bg-muted flex items-center justify-center shadow-sm z-10 group-hover:bg-background transition-colors">
-                                    {getActionIcon(log.action)}
-                                </div>
+                        {logs.map((log) => {
+                            const hasDetails = log.metadata_json &&
+                                Object.keys(log.metadata_json).filter(
+                                    k => k !== 'training_id' && k !== 'user_id'
+                                ).length > 0;
+                            const isExpanded = expandedIds.has(log.id);
 
-                                <div className="flex flex-col">
-                                    <div className="flex items-baseline justify-between gap-4 mb-1">
-                                        <h4 className="text-sm font-bold leading-none">
-                                            {formatActionName(log.action)}
-                                        </h4>
-                                        <span className="text-[10px] tabular-nums text-muted-foreground whitespace-nowrap">
-                                            {new Date(log.created_at).toLocaleString([], { 
-                                                month: 'short', 
-                                                day: 'numeric', 
-                                                hour: '2-digit', 
-                                                minute: '2-digit' 
-                                            })}
-                                        </span>
+                            return (
+                                <div key={log.id} className="relative pl-10 group">
+                                    {/* Dot Icon */}
+                                    <div className="absolute left-[-0.65rem] top-0 w-8 h-8 rounded-full border-4 border-background bg-muted flex items-center justify-center shadow-sm z-10 group-hover:bg-background transition-colors">
+                                        {getActionIcon(log.action)}
                                     </div>
-                                    
-                                    <p className="text-xs text-muted-foreground mb-2">
-                                        by <span className="font-semibold text-foreground uppercase tracking-tighter text-[10px] bg-muted px-1.5 py-0.5 rounded-sm">
-                                            {log.user_name || "Unknown User"}
-                                        </span>
-                                    </p>
 
-                                    {log.metadata_json && Object.keys(log.metadata_json).length > 0 && (
-                                        <div className="rounded-lg bg-muted/50 p-2 border border-border/50">
-                                            <div className="text-[10px] space-y-1">
-                                                {Object.entries(log.metadata_json)
-                                                    .filter(([key]) => key !== 'training_id' && key !== 'user_id')
-                                                    .map(([key, value]) => (
-                                                        <div key={key} className="flex gap-2">
-                                                            <span className="font-bold text-muted-foreground lowercase">{key}:</span>
-                                                            <span className="truncate max-w-[200px] italic">
-                                                                {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-                                                            </span>
-                                                        </div>
-                                                ))}
+                                    <div className="flex flex-col">
+                                        {/* Header row — clickable when details exist */}
+                                        <button
+                                            type="button"
+                                            onClick={() => hasDetails && toggleExpanded(log.id)}
+                                            className={cn(
+                                                "flex items-center justify-between gap-4 mb-2 w-full text-left",
+                                                hasDetails && "cursor-pointer"
+                                            )}
+                                            disabled={!hasDetails}
+                                        >
+                                            <div className="flex items-center gap-1.5 min-w-0">
+                                                <h4 className="text-sm font-bold leading-none">
+                                                    {formatActionName(log.action)}
+                                                </h4>
+                                                {hasDetails && (
+                                                    <ChevronDown
+                                                        className={cn(
+                                                            "h-3 w-3 text-muted-foreground shrink-0 transition-transform duration-200",
+                                                            isExpanded && "rotate-180"
+                                                        )}
+                                                    />
+                                                )}
                                             </div>
-                                        </div>
-                                    )}
+                                            <div className="flex items-center gap-2 shrink-0">
+                                                <span className="font-semibold text-foreground uppercase tracking-tighter text-[10px] bg-muted px-1.5 py-0.5 rounded-sm whitespace-nowrap">
+                                                    {log.user_name || "Unknown"}
+                                                </span>
+                                                <span className="text-[10px] tabular-nums text-muted-foreground whitespace-nowrap">
+                                                    {new Date(log.created_at).toLocaleString([], {
+                                                        month: 'short',
+                                                        day: 'numeric',
+                                                        hour: '2-digit',
+                                                        minute: '2-digit'
+                                                    })}
+                                                </span>
+                                            </div>
+                                        </button>
+
+                                        {hasDetails && isExpanded && (
+                                            <div className="rounded-lg bg-muted/50 p-2 border border-border/50">
+                                                <div className="text-[10px] space-y-1.5">
+                                                    {Object.entries(log.metadata_json!)
+                                                        .filter(([key]) => key !== 'training_id' && key !== 'user_id')
+                                                        .map(([key, value]) => (
+                                                            <div key={key} className="flex flex-col gap-0.5">
+                                                                <span className="font-bold text-muted-foreground lowercase">{key}:</span>
+                                                                <span className="italic break-words whitespace-pre-wrap">
+                                                                    {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
+                                                                </span>
+                                                            </div>
+                                                        ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 </div>
             </ScrollArea>

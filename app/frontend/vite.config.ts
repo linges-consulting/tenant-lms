@@ -14,11 +14,16 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 80,
     strictPort: true,
+    allowedHosts: ['gateway', 'localhost'],
     hmr: {
       clientPort: 80,
     },
     proxy: {
       '/api': {
+        target: 'http://gateway:80',
+        changeOrigin: true,
+      },
+      '/storage': {
         target: 'http://gateway:80',
         changeOrigin: true,
       },

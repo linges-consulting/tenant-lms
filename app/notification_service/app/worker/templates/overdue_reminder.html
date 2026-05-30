@@ -1,9 +1,23 @@
-<!DOCTYPE html>
-<html>
-<head><title>Overdue Training</title></head>
-<body>
-<h2>Overdue Training</h2>
-<p><strong>{{ training_title }}</strong> was due on {{ due_date }}.</p>
-<a href="{{ frontend_url }}/dashboard">Complete Now</a>
-</body>
-</html>
+{% extends "base.html" %}
+
+{% block title %}Overdue Training — CPVMTraining Portal{% endblock %}
+{% block header_title %}Training Overdue{% endblock %}
+{% block header_subtitle %}Immediate action required{% endblock %}
+
+{% block content %}
+<p>Hi there,</p>
+<p>The following training was due and has not yet been completed.</p>
+
+<div class="info-box">
+  <strong>Training:</strong> {{ training_title }}<br>
+  <strong>Was due:</strong> {{ due_date }}
+</div>
+
+<div class="danger-box">
+  <strong>This training is now overdue.</strong> Please log in and complete it as soon as possible. Contact your manager if you need an extension.
+</div>
+
+<div class="btn-wrap">
+  <a href="{{ frontend_url | default('#') }}/dashboard" class="btn">Complete Now</a>
+</div>
+{% endblock %}

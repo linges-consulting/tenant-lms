@@ -12,7 +12,7 @@ class QuizSubmission(BaseModel):
     answers: List[QuizAnswer]
 
 class QuizResult(BaseModel):
-    score: float
+    score: int
     passed: bool
     attempt_number: int
     max_attempts: int
@@ -20,7 +20,7 @@ class QuizResult(BaseModel):
     correct_answers: Optional[Dict[str, List[str]]] = None # question_id -> correct_option_ids (returned on success/completion)
 
 class QuizAttemptBase(BaseModel):
-    score: float
+    score: int
     passed: bool
     attempt_number: int
 

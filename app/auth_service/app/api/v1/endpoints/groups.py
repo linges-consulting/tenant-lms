@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 from app.core.cache import cache_response, invalidate_cache
+from app.core.config import settings
 
 from app.api import deps
 from app.models.user import User
@@ -15,7 +16,7 @@ router = APIRouter()
 
 
 @router.get("", response_model=List[GroupOut])
-@cache_response("group_list", expire=600)
+@cache_response("group_list", expire=settings.CACHE_TTL_MEDIUM)
 async def list_groups(
     db: AsyncSession = Depends(deps.get_db),
     current_manager: User = Depends(deps.get_manager_or_creator),
@@ -224,6 +225,33 @@ async def remove_group_member(
     
     # Invalidate group list cache (member count changed)
     await invalidate_cache("group_list", tenant_id)
+
+
+@router.post("/internal/members", response_model=dict)
+async def get_group_members_batch(
+    group_ids: List[str],
+    db: AsyncSession = Depends(deps.get_db),
+    x_internal_api_key: Optional[str] = Header(None, alias="X-Internal-Api-Key"),
+):
+    """
+    INTERNAL ONLY: Return user_ids for each group in the supplied list.
+    Returns { group_id: [user_id, ...] }.
+    """
+    if x_internal_api_key != settings.INTERNAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing internal API key")
+
+    if not group_ids:
+        return {}
+
+    result = await db.execute(
+        select(GroupMembership.group_id, GroupMembership.user_id).where(
+            GroupMembership.group_id.in_(group_ids)
+        )
+    )
+    members: dict[str, list[str]] = {}
+    for group_id, user_id in result.all():
+        members.setdefault(group_id, []).append(user_id)
+    return members
 
 
 @router.post("/internal/batch", response_model=dict)

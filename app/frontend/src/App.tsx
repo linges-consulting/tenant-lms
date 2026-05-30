@@ -31,6 +31,9 @@ import { AdminCertificateTemplateEditor } from './pages/AdminCertificateTemplate
 import { LearnerCertificates } from './pages/LearnerCertificates';
 import { NotFound } from './pages/NotFound';
 import { ManagerReports } from './pages/ManagerReports';
+import { ManagerAnalytics } from './pages/ManagerAnalytics';
+import { ManagerAnalyticsDetail } from './pages/ManagerAnalyticsDetail';
+import { ManagerCategoryManager } from './pages/ManagerCategoryManager';
 import { ManagerPublishTrainings } from './pages/ManagerPublishTrainings';
 import { AdminBulkImport } from './pages/AdminBulkImport';
 import { DynamicTitleUpdater } from './hooks/useDynamicTitle';
@@ -66,7 +69,7 @@ function App() {
         {/* Learner Portal Routes - Require Auth */}
         <Route path="/dashboard" element={<AuthGuard requireNotSysAdmin><AppLayout /></AuthGuard>}>
           <Route index element={<UnifiedDashboard />} />
-          <Route path="my-courses" element={<Navigate to="/dashboard" replace />} />
+          <Route path="my-courses" element={<MyTrainings basePath="/dashboard" />} />
           <Route path="certificates" element={<LearnerCertificates />} />
           <Route path="learn/:id" element={<TrainingViewer />} />
           <Route path="*" element={<NotFound />} />
@@ -84,6 +87,9 @@ function App() {
           <Route path="certificates" element={<LearnerCertificates />} />
           <Route path="learn/:id" element={<TrainingViewer />} />
           <Route path="reports" element={<AuthGuard requireBusinessManager><ManagerReports /></AuthGuard>} />
+          <Route path="analytics" element={<AuthGuard requireBusinessManager><ManagerAnalytics /></AuthGuard>} />
+          <Route path="analytics/:trainingId" element={<AuthGuard requireBusinessManager><ManagerAnalyticsDetail /></AuthGuard>} />
+          <Route path="categories" element={<AuthGuard requireBusinessManager><ManagerCategoryManager /></AuthGuard>} />
           <Route path="publish" element={<AuthGuard requireBusinessManager><ManagerPublishTrainings /></AuthGuard>} />
           <Route path="publish/:id/assignments" element={<AuthGuard requireBusinessManager><ManagerTrainingAssignments /></AuthGuard>} />
           <Route path="*" element={<NotFound />} />

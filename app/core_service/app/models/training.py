@@ -1,5 +1,6 @@
+from datetime import datetime
 from typing import List, Optional
-from sqlalchemy import String, Boolean, Integer, ForeignKey, JSON
+from sqlalchemy import String, Boolean, Integer, ForeignKey, JSON, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base_class import Base
 
@@ -26,6 +27,7 @@ class Training(Base):
     structure_type: Mapped[str] = mapped_column(String(20), nullable=False, default="flat", server_default="flat")
     requires_recertification: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     recertification_period_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    content_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     template: Mapped[Optional["CertificateTemplate"]] = relationship("CertificateTemplate")
 

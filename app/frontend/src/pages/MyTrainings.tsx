@@ -19,6 +19,17 @@ import { certificatesApi } from '../api/certificates';
 import type { Training, Certificate } from '../api/trainings';
 import { useAuth } from '../contexts/auth-context';
 
+function formatDueCountdown(expiresAt: string): { label: string; isPast: boolean } {
+    const now = Date.now();
+    const due = new Date(expiresAt).getTime();
+    const diffMs = due - now;
+    if (diffMs <= 0) return { label: 'Past Due', isPast: true };
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    if (diffHours < 24) return { label: `${diffHours}h left`, isPast: false };
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    return { label: `${diffDays}d left`, isPast: false };
+}
+
 const PRESET_GRADIENTS: Record<string, string> = {
     ocean:  'linear-gradient(135deg, #3b82f6 0%, #4338ca 100%)',
     sunset: 'linear-gradient(135deg, #f97316 0%, #e11d48 100%)',
@@ -35,7 +46,7 @@ type Filter = 'active' | 'completed' | 'expired' | 'all';
 const filterLabels: Record<Filter, string> = {
     active: 'Active',
     completed: 'Completed',
-    expired: 'Expired',
+    expired: 'Overdue',
     all: 'All',
 };
 
@@ -158,7 +169,7 @@ export const MyTrainings: React.FC<MyTrainingsProps> = ({ basePath = "/dashboard
                         {activeFilter === 'completed'
                             ? "You haven't completed any trainings yet. Keep going!"
                             : activeFilter === 'expired'
-                                ? 'No expired trainings.'
+                                ? 'No overdue trainings.'
                                 : activeFilter === 'all'
                                     ? 'No trainings assigned yet.'
                                     : 'No active trainings. Check the Completed tab to review past work.'}
@@ -234,7 +245,7 @@ export const MyTrainings: React.FC<MyTrainingsProps> = ({ basePath = "/dashboard
                                     )}
                                     {course.status === 'expired' && (
                                         <Badge className="absolute top-3 right-3 bg-destructive text-destructive-foreground border-0 text-xs shadow-sm">
-                                            Expired
+                                            Overdue
                                         </Badge>
                                     )}
                                     {(course.status === 'in_progress' || course.status === 'not_started') && (
@@ -257,19 +268,35 @@ export const MyTrainings: React.FC<MyTrainingsProps> = ({ basePath = "/dashboard
 
                                     {/* Progress Bar */}
                                     {course.status !== 'completed' && (
-                                        <div className="mb-4">
+                                        <div className="mb-3">
                                             <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
                                                 <span>Progress</span>
                                                 <span>{course.progress_percentage}%</span>
                                             </div>
                                             <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
-                                                <div 
+                                                <div
                                                     className={cn('h-full transition-all duration-500', course.status === 'expired' ? 'bg-destructive' : 'bg-primary')}
                                                     style={{ width: `${course.progress_percentage}%` }}
                                                 />
                                             </div>
                                         </div>
                                     )}
+
+                                    {/* Due date (per-user assignment deadline) */}
+                                    {course.due_date && course.status !== 'completed' && (() => {
+                                        const { label, isPast } = formatDueCountdown(course.due_date);
+                                        return (
+                                            <p className={cn(
+                                                'text-[10px] mb-3 flex items-center gap-1',
+                                                isPast ? 'text-destructive font-semibold' : 'text-muted-foreground'
+                                            )}>
+                                                <Clock className="w-3 h-3 shrink-0" />
+                                                {isPast
+                                                    ? `Past Due · ${new Date(course.due_date).toLocaleDateString()}`
+                                                    : `Due ${new Date(course.due_date).toLocaleDateString()} · ${label}`}
+                                            </p>
+                                        );
+                                    })()}
 
                                     <div className="mt-auto pt-3 flex items-center justify-between">
                                         {course.status === 'completed' ? (
@@ -319,7 +346,7 @@ export const MyTrainings: React.FC<MyTrainingsProps> = ({ basePath = "/dashboard
                                                 {course.status === 'expired' ? (
                                                     <>
                                                         <Clock className="w-3.5 h-3.5 mr-2" />
-                                                        Expired
+                                                        Overdue
                                                     </>
                                                 ) : (
                                                     <>

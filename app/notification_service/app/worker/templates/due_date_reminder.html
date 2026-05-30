@@ -1,9 +1,27 @@
-<!DOCTYPE html>
-<html>
-<head><title>Training Due Soon</title></head>
-<body>
-<h2>Training Due in {{ days_before }} Day{{ 's' if days_before != 1 else '' }}</h2>
-<p><strong>{{ training_title }}</strong> is due on {{ due_date }}.</p>
-<a href="{{ frontend_url }}/dashboard">Continue Training</a>
-</body>
-</html>
+{% extends "base.html" %}
+
+{% block title %}Training Due Soon — CPVMTraining Portal{% endblock %}
+{% block header_title %}Training Due Soon{% endblock %}
+{% block header_subtitle %}
+  {% if days_before == 1 %}Due tomorrow{% else %}Due in {{ days_before }} days{% endif %}
+{% endblock %}
+
+{% block content %}
+<p>Hi there,</p>
+<p>This is a reminder that the following training is coming up on your schedule.</p>
+
+<div class="info-box">
+  <strong>Training:</strong> {{ training_title }}<br>
+  <strong>Due date:</strong> {{ due_date }}
+</div>
+
+{% if days_before == 1 %}
+<div class="warning-box">
+  <strong>Due tomorrow.</strong> Log in now to complete your training on time.
+</div>
+{% endif %}
+
+<div class="btn-wrap">
+  <a href="{{ frontend_url | default('#') }}/dashboard" class="btn">Continue Training</a>
+</div>
+{% endblock %}

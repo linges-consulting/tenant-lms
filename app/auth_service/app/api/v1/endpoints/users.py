@@ -1347,21 +1347,22 @@ async def get_users_batch(
     x_internal_api_key: Optional[str] = Header(None, alias="X-Internal-Api-Key"),
 ):
     """
-    INTERNAL ONLY: Fetch basic user info (id, full_name, email) for a batch of IDs.
+    INTERNAL ONLY: Fetch basic user info (id, full_name, email, username) for a batch of IDs.
     """
     from app.core.config import settings
     if x_internal_api_key != settings.INTERNAL_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid or missing internal API key")
 
     result = await db.execute(
-        select(User.id, User.full_name, User.email).where(User.id.in_(user_ids))
+        select(User.id, User.full_name, User.email, User.username).where(User.id.in_(user_ids))
     )
     users = result.all()
-    # Format as { "user_id": { "full_name": "...", "email": "..." } }
+    # Format as { "user_id": { "full_name": "...", "email": "...", "username": "..." } }
     return {
         u.id: {
             "full_name": u.full_name,
-            "email": u.email
+            "email": u.email,
+            "username": u.username
         } for u in users
     }
 
@@ -1582,7 +1583,7 @@ async def admin_invite_to_tenant(
 
 
 @router.get("/profile/{username}", response_model=UserSchema)
-@cache_response("public_profile", expire=300)
+@cache_response("public_profile", expire=settings.CACHE_TTL_SHORT)
 async def get_user_profile_by_username(
     username: str,
     db: AsyncSession = Depends(deps.get_db),

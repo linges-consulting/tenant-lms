@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     
     # Redis
     REDIS_URL: str = "redis://redis:6379/0"
+    CACHE_TTL_SHORT: int = 300    # 5 min  — most API responses
+    CACHE_TTL_MEDIUM: int = 600   # 10 min — group/admin data
+    CACHE_TTL_LONG: int = 1800    # 30 min — rarely-changing data
     
     # Service Authentication (Internal Validation)
     INTERNAL_API_KEY: str = "super-secret-internal-key"

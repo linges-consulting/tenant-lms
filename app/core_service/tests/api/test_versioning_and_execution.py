@@ -224,7 +224,6 @@ async def test_ver_02_republish_increments_version(client, db_session):
        because the training already has a chapter from step 1).
     5. Second publish → version must be > 2.
     """
-    from sqlalchemy import update as sa_update
     from app.models.training import Training as TrainingModel
 
     tenant_id = str(uuid.uuid4())
@@ -246,20 +245,14 @@ async def test_ver_02_republish_increments_version(client, db_session):
     version_after_first = pub1.json()["version"]
     _clear_overrides()
 
-    # send-to-draft (unpublish)
+    # Manager unpublishes → returns to Ready state (is_ready=True, is_published=False)
     _set_user(manager)
-    draft_resp = await client.post(f"/api/v1/trainings/{training_id}/send-to-draft")
-    assert draft_resp.status_code == 200, f"Send-to-draft failed: {draft_resp.status_code}: {draft_resp.text}"
+    unp_resp = await client.post(f"/api/v1/trainings/{training_id}/unpublish")
+    assert unp_resp.status_code == 200, f"Unpublish failed: {unp_resp.status_code}: {unp_resp.text}"
+    assert unp_resp.json()["is_ready"] is True, "Unpublish should return training to Ready state"
     _clear_overrides()
 
-    # Set training back to Ready state directly in DB so we can publish again
-    # (mark-ready via API is the proper way; here we bypass to avoid test complexity)
-    await db_session.execute(
-        sa_update(TrainingModel)
-        .where(TrainingModel.id == training_id)
-        .values(is_ready=True, is_published=False)
-    )
-    await db_session.commit()
+    # Training is already in Ready state after unpublish — no DB bypass needed
 
     # Second publish — version must be greater than after first publish
     _set_user(manager)

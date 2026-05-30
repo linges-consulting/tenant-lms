@@ -4,7 +4,9 @@ import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../components/ui/dialog';
+import { Textarea } from '../components/ui/textarea';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
 import {
     Globe,
     EyeOff,
@@ -17,6 +19,7 @@ import {
     ExternalLink,
     UserPlus,
     PlayCircle,
+    RotateCcw,
 } from 'lucide-react';
 import { managerTrainingsApi } from '../api/trainings';
 import type { Training } from '../api/trainings';
@@ -65,6 +68,12 @@ export const ManagerPublishTrainings: React.FC = () => {
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('ready');
     const [actionInProgress, setActionInProgress] = useState<string | null>(null);
     const [previewTraining, setPreviewTraining] = useState<Training | null>(null);
+    const [publishTarget, setPublishTarget] = useState<Training | null>(null);
+    const [unpublishTarget, setUnpublishTarget] = useState<Training | null>(null);
+    const [unpublishCompletionCount, setUnpublishCompletionCount] = useState(0);
+    const [unpublishAssignedCount, setUnpublishAssignedCount] = useState(0);
+    const [sendToDraftTarget, setSendToDraftTarget] = useState<Training | null>(null);
+    const [sendToDraftComment, setSendToDraftComment] = useState('');
 
     useEffect(() => {
         const fetchTrainings = async () => {
@@ -81,7 +90,8 @@ export const ManagerPublishTrainings: React.FC = () => {
         fetchTrainings();
     }, []);
 
-    const handlePublish = async (training: Training) => {
+    const doPublish = async (training: Training) => {
+        setPublishTarget(null);
         setActionInProgress(training.id);
         try {
             const updated = await managerTrainingsApi.publishTraining(training.id);
@@ -96,12 +106,42 @@ export const ManagerPublishTrainings: React.FC = () => {
     const handleUnpublish = async (training: Training) => {
         setActionInProgress(training.id);
         try {
+            const { completed_count, assigned_count } = await managerTrainingsApi.getTrainingCompletionCount(training.id);
+            setUnpublishCompletionCount(completed_count ?? 0);
+            setUnpublishAssignedCount(assigned_count ?? 0);
+            setUnpublishTarget(training);
+        } catch (error) {
+            console.error('Failed to check completions', error);
+        } finally {
+            setActionInProgress(null);
+        }
+    };
+
+    const doUnpublish = async (training: Training) => {
+        setActionInProgress(training.id);
+        try {
             const updated = await managerTrainingsApi.unpublishTraining(training.id);
             setTrainings(prev => prev.map(t => t.id === training.id ? { ...t, ...updated } : t));
         } catch (error) {
             console.error('Failed to unpublish training', error);
         } finally {
             setActionInProgress(null);
+            setUnpublishTarget(null);
+        }
+    };
+
+    const doManagerSendToDraft = async () => {
+        if (!sendToDraftTarget) return;
+        setActionInProgress(sendToDraftTarget.id);
+        try {
+            const updated = await managerTrainingsApi.managerRevertToDraft(sendToDraftTarget.id, sendToDraftComment);
+            setTrainings(prev => prev.map(t => t.id === sendToDraftTarget.id ? { ...t, ...updated } : t));
+        } catch (error) {
+            console.error('Failed to send training to draft', error);
+        } finally {
+            setActionInProgress(null);
+            setSendToDraftTarget(null);
+            setSendToDraftComment('');
         }
     };
 
@@ -245,15 +285,28 @@ export const ManagerPublishTrainings: React.FC = () => {
                                                                 {isActing ? 'Updating…' : 'Unpublish'}
                                                             </Button>
                                                         ) : status === 'ready' ? (
-                                                            <Button
-                                                                size="sm"
-                                                                disabled={isActing}
-                                                                onClick={() => handlePublish(training)}
-                                                                className="h-7 text-xs"
-                                                            >
-                                                                <Globe className="h-3.5 w-3.5 mr-1" />
-                                                                {isActing ? 'Publishing…' : 'Publish'}
-                                                            </Button>
+                                                            <div className="flex items-center gap-1.5">
+                                                                <Button
+                                                                    size="sm"
+                                                                    disabled={isActing}
+                                                                    onClick={() => setPublishTarget(training)}
+                                                                    className="h-7 text-xs"
+                                                                >
+                                                                    <Globe className="h-3.5 w-3.5 mr-1" />
+                                                                    {isActing ? 'Publishing…' : 'Publish'}
+                                                                </Button>
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="ghost"
+                                                                    disabled={isActing}
+                                                                    onClick={() => { setSendToDraftTarget(training); setSendToDraftComment(''); }}
+                                                                    className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                                                                    title="Send back to draft with a comment"
+                                                                >
+                                                                    <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                                                                    Send to Draft
+                                                                </Button>
+                                                            </div>
                                                         ) : (
                                                             <span className="text-xs text-muted-foreground px-2">
                                                                 {status === 'archived' ? 'Archived' : 'Not ready'}
@@ -295,6 +348,94 @@ export const ManagerPublishTrainings: React.FC = () => {
                 </CardContent>
             </Card>
         </div>
+
+        {/* Publish confirmation */}
+        <AlertDialog open={!!publishTarget} onOpenChange={(open) => { if (!open) setPublishTarget(null); }}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Publish "{publishTarget?.title}"?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        This training will become visible to all assigned learners immediately. Make sure the content is final before publishing.
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => publishTarget && doPublish(publishTarget)}>
+                        <Globe className="h-3.5 w-3.5 mr-1.5" />
+                        Publish
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Unpublish confirmation — always shown */}
+        <AlertDialog open={!!unpublishTarget} onOpenChange={(open) => { if (!open) setUnpublishTarget(null); }}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Unpublish "{unpublishTarget?.title}"?</AlertDialogTitle>
+                    <AlertDialogDescription asChild>
+                        <div className="space-y-2 text-sm text-muted-foreground">
+                            <p>This training will return to <strong>Ready</strong> status and become invisible to learners.</p>
+                            {unpublishCompletionCount > 0 && (
+                                <p className="text-destructive font-medium">
+                                    ⚠ {unpublishCompletionCount} employee{unpublishCompletionCount !== 1 ? 's have' : ' has'} completed this training — their progress and completion records will be reset.
+                                </p>
+                            )}
+                            {unpublishAssignedCount > 0 && (
+                                <p>
+                                    {unpublishAssignedCount} employee{unpublishAssignedCount !== 1 ? 's are' : ' is'} currently assigned and will lose access immediately.
+                                </p>
+                            )}
+                        </div>
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        onClick={() => unpublishTarget && doUnpublish(unpublishTarget)}
+                    >
+                        Unpublish
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Manager Send to Draft dialog */}
+        <Dialog open={!!sendToDraftTarget} onOpenChange={(open) => { if (!open) { setSendToDraftTarget(null); setSendToDraftComment(''); } }}>
+            <DialogContent className="max-w-md">
+                <DialogHeader>
+                    <DialogTitle>Send back to Draft?</DialogTitle>
+                    <DialogDescription>
+                        "{sendToDraftTarget?.title}" will return to Draft. The creator and collaborators will be notified.
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-2 py-2">
+                    <label className="text-sm font-medium text-foreground">Reason / feedback for the creator</label>
+                    <Textarea
+                        placeholder="e.g. Section 2 needs updated compliance information before publishing…"
+                        value={sendToDraftComment}
+                        onChange={e => setSendToDraftComment(e.target.value)}
+                        rows={4}
+                        className="resize-none"
+                    />
+                    <p className="text-xs text-muted-foreground">This comment will appear in the training's audit history.</p>
+                </div>
+                <DialogFooter>
+                    <Button variant="ghost" onClick={() => { setSendToDraftTarget(null); setSendToDraftComment(''); }}>
+                        Cancel
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        disabled={!!actionInProgress}
+                        onClick={doManagerSendToDraft}
+                    >
+                        <RotateCcw className="h-4 w-4 mr-1.5" />
+                        Send to Draft
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
 
         {/* Training preview mode picker */}
         <Dialog open={!!previewTraining} onOpenChange={(open) => { if (!open) setPreviewTraining(null); }}>

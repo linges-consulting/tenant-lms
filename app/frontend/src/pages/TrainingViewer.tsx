@@ -11,7 +11,7 @@ import {
     ChevronLeft, ChevronRight, PlayCircle, CheckCircle2, Lock, HelpCircle,
     Loader2, Award, PanelRightClose, PanelRightOpen, Eye, BookOpen,
     AlertCircle, Trophy, XCircle, CheckCircle, Check, X,
-    Video, File as FileIcon, Package
+    Video, File as FileIcon, Package, Clock
 } from 'lucide-react';
 import { Progress as UIProgress } from "../components/ui/progress";
 import { AlertModal } from "../components/AlertModal";
@@ -24,6 +24,7 @@ import type { Training, TrainingStructure, Chapter, QuizAnswer, QuizResult } fro
 import { certificatesApi } from '../api/certificates';
 import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/auth-context';
+import DOMPurify from 'dompurify';
 
 // ── Quiz question types ──────────────────────────────────────────────────────
 
@@ -447,10 +448,22 @@ export const TrainingViewer: React.FC = () => {
             return;
         }
 
-        const submission: QuizAnswer[] = (activeChapter.content_data.questions as Question[]).map((q) => ({
-            question_id: q.id,
-            selected_option_ids: selectedAnswers[q.id] || []
-        }));
+        const submission: QuizAnswer[] = (activeChapter.content_data.questions as Question[]).map((q) => {
+            const raw = selectedAnswers[q.id] || [];
+            if (q.type === 'ordering') {
+                return { question_id: q.id, selected_option_ids: [], ordered_ids: raw };
+            }
+            if (q.type === 'matching') {
+                const pairs = raw
+                    .map((p: string) => {
+                        const [left, right] = p.split('::');
+                        return left && right ? { [left]: right } : null;
+                    })
+                    .filter(Boolean) as Record<string, string>[];
+                return { question_id: q.id, selected_option_ids: [], pairs };
+            }
+            return { question_id: q.id, selected_option_ids: raw };
+        });
 
         setQuizSubmitting(true);
         try {
@@ -488,6 +501,19 @@ export const TrainingViewer: React.FC = () => {
     }
 
     const isExpired = training.status === 'expired';
+
+    const getDueInfo = (): { label: string; isPast: boolean } | null => {
+        if (!training.due_date || training.status === 'completed') return null;
+        const now = Date.now();
+        const due = new Date(training.due_date).getTime();
+        const diffMs = due - now;
+        if (diffMs <= 0) return { label: 'Past Due', isPast: true };
+        const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+        if (diffHours < 24) return { label: `${diffHours}h left`, isPast: false };
+        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+        return { label: `${diffDays}d left`, isPast: false };
+    };
+    const dueInfo = getDueInfo();
 
     const renderQuizResultSummary = () => {
         if (!quizResult) return null;
@@ -791,7 +817,7 @@ export const TrainingViewer: React.FC = () => {
                         ) : (
                             <div className="grid grid-cols-1 gap-3">
                                 {(currentQ.options as { id: string; text: string }[] | undefined)?.map((opt, oIdx) => {
-                                    const isMultiple = (currentQ.correct_option_ids?.length || 0) > 1 || (currentQ.correct_option_id === undefined && currentQ.correct_option_ids === undefined);
+                                    const isMultiple = currentQ.type === 'multiple_select' || (currentQ.correct_option_ids?.length || 0) > 1;
                                     const isSelected = selectedAnswers[currentQ.id]?.includes(opt.id);
 
                                     return (
@@ -1081,6 +1107,24 @@ export const TrainingViewer: React.FC = () => {
                                             </div>
                                         )}
 
+                                        <div className="py-6 space-y-6">
+                                            {!!activeChapter.content_data?.description && (
+                                                <div className="p-5 bg-muted/20 border border-border/50 rounded-2xl">
+                                                    <h3 className="text-sm font-bold text-foreground mb-2 uppercase tracking-tight">Lesson Overview</h3>
+                                                    <p className="text-muted-foreground text-sm leading-relaxed whitespace-pre-wrap">{activeChapter.content_data.description as React.ReactNode}</p>
+                                                </div>
+                                            )}
+
+                                            <div className="prose max-w-none text-foreground font-medium leading-relaxed">
+                                                <div dangerouslySetInnerHTML={{
+                                                    __html: DOMPurify.sanitize(
+                                                        ((activeChapter.content_data?.text as string) || activeChapter.content || (activeChapter.content_type === 'VIDEO' ? '' : 'No content provided for this lesson.'))?.replace(/\n/g, '<br/>') ?? '',
+                                                        { USE_PROFILES: { html: true } }
+                                                    )
+                                                }} />
+                                            </div>
+                                        </div>
+
                                         <div className="bg-muted/30 p-4 rounded-xl border flex items-center justify-between gap-4">
                                             <Button
                                                 variant="outline"
@@ -1136,21 +1180,6 @@ export const TrainingViewer: React.FC = () => {
                                                 </Button>
                                             )}
                                         </div>
-
-                                        <div className="py-6 space-y-6">
-                                            {!!activeChapter.content_data?.description && (
-                                                <div className="p-5 bg-muted/20 border border-border/50 rounded-2xl">
-                                                    <h3 className="text-sm font-bold text-foreground mb-2 uppercase tracking-tight">Lesson Overview</h3>
-                                                    <p className="text-muted-foreground text-sm leading-relaxed whitespace-pre-wrap">{activeChapter.content_data.description as React.ReactNode}</p>
-                                                </div>
-                                            )}
-
-                                            <div className="prose max-w-none text-foreground font-medium leading-relaxed">
-                                                <div dangerouslySetInnerHTML={{ 
-                                                    __html: ((activeChapter.content_data?.text as string) || activeChapter.content || (activeChapter.content_type === 'VIDEO' ? '' : 'No content provided for this lesson.'))?.replace(/\n/g, '<br/>') 
-                                                }} />
-                                            </div>
-                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -1184,6 +1213,17 @@ export const TrainingViewer: React.FC = () => {
                                     <span className="text-primary">{totalProgress}%</span>
                                 </div>
                                 <UIProgress value={totalProgress} className="h-1" />
+                            </div>
+                        )}
+                        {dueInfo && (
+                            <div className={cn(
+                                'flex items-center gap-1.5 text-[10px] font-semibold mt-1',
+                                dueInfo.isPast ? 'text-destructive' : 'text-muted-foreground'
+                            )}>
+                                <Clock className="w-3 h-3 shrink-0" />
+                                {dueInfo.isPast
+                                    ? `Past Due · ${new Date(training.due_date!).toLocaleDateString()}`
+                                    : `Due ${new Date(training.due_date!).toLocaleDateString()} · ${dueInfo.label}`}
                             </div>
                         )}
                     </div>

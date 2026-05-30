@@ -32,14 +32,14 @@ class EmailService:
             return False
             
         recipient = to_email
-        if settings.ENVIRONMENT == "dev":
-            logger.info(f"Dev mode enabled. Redirecting email from {to_email} to {settings.MAILGUN_AUTHORIZED_RECIPIENT}")
+        if settings.ENVIRONMENT != "prod" and settings.MAILGUN_AUTHORIZED_RECIPIENT:
+            logger.info(f"Non-prod: redirecting email from {to_email} to {settings.MAILGUN_AUTHORIZED_RECIPIENT}")
             recipient = settings.MAILGUN_AUTHORIZED_RECIPIENT
 
         mailgun_url = f"{settings.MAILGUN_BASE_URL}/v3/{settings.MAILGUN_DOMAIN}/messages"
-        
+
         data = {
-            "from": f"CustomLMS <noreply@{settings.MAILGUN_DOMAIN}>",
+            "from": f"CPVMTraining Portal <noreply@{settings.MAILGUN_DOMAIN}>",
             "to": recipient,
             "subject": subject,
         }
@@ -90,7 +90,7 @@ class EmailService:
         Returns:
             True if successful, False otherwise
         """
-        subject = "Complete Your Registration at CustomLMS"
+        subject = "Complete Your Registration — CPVMTraining Portal"
         html = TemplateRenderer.render_registration_invite(
             full_name=full_name,
             registration_url=registration_url,
@@ -121,7 +121,7 @@ class EmailService:
         Returns:
             True if successful, False otherwise
         """
-        subject = "New Registration Link for CustomLMS"
+        subject = "New Registration Link — CPVMTraining Portal"
         html = TemplateRenderer.render_token_regenerated(
             full_name=full_name,
             registration_url=registration_url,
@@ -150,7 +150,7 @@ class EmailService:
         Returns:
             True if successful, False otherwise
         """
-        subject = "Reset Your Password"
+        subject = "Reset Your Password — CPVMTraining Portal"
         html = TemplateRenderer.render_password_reset(
             full_name=full_name,
             reset_url=reset_url,

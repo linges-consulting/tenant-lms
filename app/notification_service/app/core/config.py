@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     
     DB_URL: str = "postgresql+asyncpg://lms_user:lms_pass@postgres/notification_db"
     REDIS_URL: str
+    CACHE_TTL_SHORT: int = 300    # 5 min  — most API responses
+    CACHE_TTL_MEDIUM: int = 600   # 10 min — group/admin data
+    CACHE_TTL_LONG: int = 1800    # 30 min — rarely-changing data
     INTERNAL_API_KEY: str
     AUTH_SERVICE_URL: str = "http://auth-service:8000"
     ENVIRONMENT: str = "development"  # override to "production" in prod

@@ -1,9 +1,28 @@
-<!DOCTYPE html>
-<html>
-<head><title>Quiz Lockout</title></head>
-<body>
-<h2>Quiz Lockout — Action Required</h2>
-<p>{{ learner_name }} has been locked out of a quiz and requires a reset.</p>
-<a href="{{ frontend_url }}/manage/employees">Manage Employees</a>
-</body>
-</html>
+{% extends "base.html" %}
+
+{% block title %}Quiz Lockout — Action Required{% endblock %}
+{% block header_title %}Quiz Lockout{% endblock %}
+{% block header_subtitle %}A learner requires your attention{% endblock %}
+
+{% block content %}
+<p>Hi,</p>
+<p>
+  <strong>{{ learner_name | default('A learner') }}</strong> has been locked out of a quiz after
+  exceeding the maximum number of attempts and requires a manual reset before they can continue.
+</p>
+
+<div class="danger-box">
+  <strong>Action required:</strong> Navigate to your employee list to unlock this learner's quiz attempt.
+</div>
+
+{% if training_title %}
+<div class="info-box">
+  <strong>Training:</strong> {{ training_title }}<br>
+  {% if learner_email %}<strong>Learner email:</strong> {{ learner_email }}{% endif %}
+</div>
+{% endif %}
+
+<div class="btn-wrap">
+  <a href="{{ frontend_url | default('#') }}/manage/employees" class="btn">Manage Employees</a>
+</div>
+{% endblock %}

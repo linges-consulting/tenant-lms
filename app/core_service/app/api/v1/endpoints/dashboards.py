@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query, status
-from sqlalchemy import select, func, and_, not_, exists, Integer
+from sqlalchemy import select, func, and_, not_, or_, exists, Integer, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -84,8 +84,11 @@ async def manager_dashboard(
     )
     completed_assignments: int = completed_q.scalar_one() or 0
 
-    # Overdue assignments — due_date < now, not completed for that specific user
-    overdue_q = await db.execute(
+    # Overdue assignments — due_date < now, not completed.
+    # User-level: check that no completed enrollment exists for that user+training.
+    # Group-level: group membership data lives in auth-service so we count the
+    # assignment row itself as overdue (conservative — manager can see the group name).
+    overdue_user_q = await db.execute(
         select(func.count(TrainingAssignment.id)).where(
             TrainingAssignment.tenant_id == tenant_id,
             TrainingAssignment.deleted_at.is_(None),
@@ -102,7 +105,16 @@ async def manager_dashboard(
             ),
         )
     )
-    overdue_assignments: int = overdue_q.scalar_one() or 0
+    overdue_group_q = await db.execute(
+        select(func.count(TrainingAssignment.id)).where(
+            TrainingAssignment.tenant_id == tenant_id,
+            TrainingAssignment.deleted_at.is_(None),
+            TrainingAssignment.group_id.isnot(None),
+            TrainingAssignment.due_date.isnot(None),
+            TrainingAssignment.due_date < now,
+        )
+    )
+    overdue_assignments: int = (overdue_user_q.scalar_one() or 0) + (overdue_group_q.scalar_one() or 0)
 
     # Quiz lockouts — distinct (user_id, chapter_id) pairs where the user has
     # hit the default max attempts (10) without passing.
@@ -133,12 +145,22 @@ async def manager_dashboard(
         (completed_assignments / total_assignments * 100) if total_assignments > 0 else 0.0
     )
 
+    # Total published trainings in this tenant
+    published_q = await db.execute(
+        select(func.count(Training.id)).where(
+            Training.tenant_id == tenant_id,
+            Training.is_published.is_(True),
+            Training.deleted_at.is_(None),
+        )
+    )
+    total_trainings: int = published_q.scalar_one() or 0
+
     return {
-        "total_employees": 0,  # Comes from auth-service; not available in core-service
-        "overdue_assignments": overdue_assignments,
+        "total_trainings": total_trainings,
+        "active_assignments": total_assignments,
+        "overdue_count": overdue_assignments,
         "quiz_lockouts": quiz_lockouts,
         "completion_rate": round(completion_rate, 2),
-        "total_assignments": total_assignments,
         "completed_assignments": completed_assignments,
     }
 
@@ -185,12 +207,13 @@ async def creator_dashboard(
     )
     published: int = published_q.scalar_one() or 0
 
-    draft = total_trainings - published
+    draft_count = total_trainings - published
 
     return {
         "total_trainings": total_trainings,
-        "published": published,
-        "draft": draft,
+        "published_count": published,
+        "draft_count": draft_count,
+        "total_enrollments": 0,
     }
 
 
@@ -205,82 +228,83 @@ async def employee_dashboard(
 ):
     """
     Personal training dashboard for any authenticated user.
+    Returns stat counts for the 4 learner dashboard cards.
     """
     now = datetime.now(timezone.utc)
-    seven_days_later = now + timedelta(days=7)
     user_id = current_user.id
     tenant_id = current_user.tenant_id
 
-    # In-progress: assignments for this user where no completed enrollment exists — latest 5
-    in_progress_q = await db.execute(
-        select(TrainingAssignment).where(
-            TrainingAssignment.user_id == user_id,
-            TrainingAssignment.tenant_id == tenant_id,
-            TrainingAssignment.deleted_at.is_(None),
-            # Exclude trainings where user has a completed enrollment
-            ~TrainingAssignment.training_id.in_(
-                select(Enrollment.training_id).where(
-                    Enrollment.user_id == user_id,
-                    Enrollment.tenant_id == tenant_id,
-                    Enrollment.is_completed.is_(True),
-                )
-            ),
-        )
-        .order_by(TrainingAssignment.assigned_at.desc())
-        .limit(5)
-    )
-    in_progress_rows = in_progress_q.scalars().all()
-    in_progress = [
-        {"training_id": a.training_id, "due_date": a.due_date}
-        for a in in_progress_rows
-    ]
-
-    # Upcoming due: due_date within next 7 days, not yet completed
-    upcoming_q = await db.execute(
-        select(TrainingAssignment).where(
-            TrainingAssignment.user_id == user_id,
-            TrainingAssignment.tenant_id == tenant_id,
-            TrainingAssignment.deleted_at.is_(None),
-            TrainingAssignment.due_date.isnot(None),
-            TrainingAssignment.due_date >= now,
-            TrainingAssignment.due_date <= seven_days_later,
-            ~TrainingAssignment.training_id.in_(
-                select(Enrollment.training_id).where(
-                    Enrollment.user_id == user_id,
-                    Enrollment.tenant_id == tenant_id,
-                    Enrollment.is_completed.is_(True),
-                )
-            ),
-        )
-        .order_by(TrainingAssignment.due_date.asc())
-    )
-    upcoming_rows = upcoming_q.scalars().all()
-    upcoming_due = [
-        {"training_id": a.training_id, "due_date": a.due_date}
-        for a in upcoming_rows
-    ]
-
-    # Recently completed: last 5 completed enrollments for this user
-    completed_q = await db.execute(
-        select(Enrollment).where(
+    # Subquery: training_ids this user has completed
+    completed_training_ids_sq = (
+        select(Enrollment.training_id).where(
             Enrollment.user_id == user_id,
             Enrollment.tenant_id == tenant_id,
             Enrollment.is_completed.is_(True),
-            Enrollment.completed_at.isnot(None),
         )
-        .order_by(Enrollment.completed_at.desc())
-        .limit(5)
     )
-    completed_rows = completed_q.scalars().all()
-    recently_completed = [
-        {"training_id": e.training_id, "completed_at": e.completed_at}
-        for e in completed_rows
-    ]
+
+    # Build assignee filter once — reused by assigned and overdue queries
+    assignee_filter = [TrainingAssignment.user_id == user_id]
+    if current_user.groups:
+        assignee_filter.append(TrainingAssignment.group_id.in_(current_user.groups))
+
+    # Assigned trainings: distinct published trainings with an active assignment (not yet completed)
+    assigned_q = await db.execute(
+        select(func.count(distinct(TrainingAssignment.training_id))).where(
+            TrainingAssignment.tenant_id == tenant_id,
+            TrainingAssignment.deleted_at.is_(None),
+            or_(*assignee_filter),
+            ~TrainingAssignment.training_id.in_(completed_training_ids_sq),
+            exists(
+                select(Training.id).where(
+                    Training.id == TrainingAssignment.training_id,
+                    Training.is_published.is_(True),
+                    Training.is_archived.is_(False),
+                )
+            ),
+        )
+    )
+    assigned_trainings: int = assigned_q.scalar_one() or 0
+
+    # In-progress: has a non-completed enrollment (user started but not finished)
+    in_progress_q = await db.execute(
+        select(func.count(distinct(Enrollment.training_id))).where(
+            Enrollment.user_id == user_id,
+            Enrollment.tenant_id == tenant_id,
+            Enrollment.is_completed.is_(False),
+        )
+    )
+    in_progress_trainings: int = in_progress_q.scalar_one() or 0
+
+    # Completed: distinct trainings with a completed enrollment
+    completed_count_q = await db.execute(
+        select(func.count(distinct(Enrollment.training_id))).where(
+            Enrollment.user_id == user_id,
+            Enrollment.tenant_id == tenant_id,
+            Enrollment.is_completed.is_(True),
+        )
+    )
+    completed_trainings: int = completed_count_q.scalar_one() or 0
+
+    # Overdue: active assignment past due_date, not completed
+    # Reuses assignee_filter which covers both direct and group assignments
+    overdue_q = await db.execute(
+        select(func.count(distinct(TrainingAssignment.training_id))).where(
+            TrainingAssignment.tenant_id == tenant_id,
+            TrainingAssignment.deleted_at.is_(None),
+            TrainingAssignment.due_date.isnot(None),
+            TrainingAssignment.due_date < now,
+            or_(*assignee_filter),
+            ~TrainingAssignment.training_id.in_(completed_training_ids_sq),
+        )
+    )
+    overdue_trainings: int = overdue_q.scalar_one() or 0
 
     return {
-        "in_progress": in_progress,
-        "upcoming_due": upcoming_due,
-        "recently_completed": recently_completed,
+        "assigned_trainings": assigned_trainings,
+        "in_progress_trainings": in_progress_trainings,
+        "completed_trainings": completed_trainings,
+        "overdue_trainings": overdue_trainings,
     }
 
 

@@ -4,7 +4,8 @@ import sys
 import logging
 
 BANNER_PRESETS = ("ocean", "sunset", "forest", "ember")
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query as QP
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Query as QP
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, delete
 from sqlalchemy.orm import selectinload
@@ -12,6 +13,7 @@ from typing import List, Optional
 
 from app.api import deps
 from app.core.cache import cache_response, invalidate_cache
+from app.core.config import settings
 from app.models.training import Training
 from app.models.module import Module
 from app.models.chapter import Chapter, ContentType
@@ -120,7 +122,7 @@ async def check_training_edit_permission(
     return result.scalar_one_or_none() is not None
 
 @router.get("", response_model=List[TrainingSchema])
-@cache_response("assigned_trainings", expire=300, include_user_id=True)
+@cache_response("assigned_trainings", expire=settings.CACHE_TTL_SHORT, include_user_id=True)
 async def read_trainings(
     db: AsyncSession = Depends(deps.get_db),
     current_user: deps.UserAuth = Depends(deps.get_current_tenant_user),
@@ -213,6 +215,7 @@ async def read_trainings(
             schema = TrainingSchema.model_validate(training_obj)
             schema.total_chapters = total_count
             schema.completed_chapters = completed_count
+            schema.due_date = due_date
             
             # Enrich creator name
             if training_obj.created_by_id and training_obj.created_by_id in users_data:
@@ -355,6 +358,7 @@ async def create_training(
         tags=training_in.tags,
         requires_recertification=training_in.requires_recertification,
         recertification_period_days=training_in.recertification_period_days,
+        content_expires_at=training_in.content_expires_at,
     )
     training_id = db_item.id
     db.add(db_item)
@@ -372,6 +376,121 @@ async def create_training(
     await db.commit()
     
     return db_item
+
+@router.post("/{training_id}/clone", response_model=TrainingSchema, status_code=status.HTTP_201_CREATED)
+async def clone_training(
+    training_id: str,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: deps.UserAuth = Depends(deps.get_training_creator),
+    tenant_id: str = Depends(deps.get_current_tenant_id),
+):
+    """
+    Deep-clone a training as a new draft. Copies modules, chapters, and quiz content.
+    Skips collaborators, assignments, and enrollments. Owner of the clone is the requester.
+    """
+    # Load source training
+    src_result = await db.execute(
+        select(Training).where(
+            Training.id == training_id,
+            Training.tenant_id == tenant_id,
+            Training.deleted_at.is_(None),
+        ).options(selectinload(Training.collaborators))
+    )
+    source = src_result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail="Training not found")
+
+    # Load modules and chapters
+    modules_result = await db.execute(
+        select(Module).where(Module.training_id == training_id, Module.deleted_at.is_(None))
+        .order_by(Module.sequence_order)
+    )
+    source_modules = modules_result.scalars().all()
+
+    chapters_result = await db.execute(
+        select(Chapter).where(Chapter.training_id == training_id, Chapter.deleted_at.is_(None))
+        .order_by(Chapter.sequence_order)
+    )
+    source_chapters = chapters_result.scalars().all()
+
+    # Create new training
+    new_training_id = str(uuid.uuid4())
+    new_training = Training(
+        id=new_training_id,
+        tenant_id=tenant_id,
+        title=f"Copy of {source.title}",
+        description=source.description,
+        category=source.category,
+        duration=source.duration,
+        thumbnail=source.thumbnail,
+        version=1,
+        is_published=False,
+        is_ready=False,
+        is_archived=False,
+        requires_certificate=source.requires_certificate,
+        template_id=source.template_id,
+        created_by_id=current_user.id,
+        structure_type=source.structure_type,
+        tags=list(source.tags) if source.tags else [],
+        requires_recertification=source.requires_recertification,
+        recertification_period_days=source.recertification_period_days,
+    )
+    db.add(new_training)
+
+    # Clone modules — build mapping from old → new module IDs
+    module_id_map: dict[str, str] = {}
+    try:
+        for mod in source_modules:
+            new_mod_id = str(uuid.uuid4())
+            module_id_map[mod.id] = new_mod_id
+            db.add(Module(
+                id=new_mod_id,
+                tenant_id=tenant_id,
+                training_id=new_training_id,
+                title=mod.title,
+                sequence_order=mod.sequence_order,
+            ))
+
+        # Flush so module PKs are visible before chapters reference them
+        await db.flush()
+
+        # Clone chapters
+        for ch in source_chapters:
+            new_ch_id = str(uuid.uuid4())
+            new_module_id = module_id_map.get(ch.module_id) if ch.module_id else None
+            db.add(Chapter(
+                id=new_ch_id,
+                tenant_id=tenant_id,
+                training_id=new_training_id,
+                module_id=new_module_id,
+                title=ch.title,
+                content_type=ch.content_type,
+                content_data=dict(ch.content_data) if ch.content_data else {},
+                sequence_order=ch.sequence_order,
+                completion_mode=ch.completion_mode if ch.completion_mode else "can_continue",
+            ))
+
+        logger.info(f"Clone {training_id}: copied {len(source_modules)} modules, {len(source_chapters)} chapters")
+    except Exception:
+        logger.exception("Clone failed")
+        raise
+
+    await db.commit()
+
+    # Audit log
+    await log_audit(db, tenant_id, current_user.id, "CLONE", "training", new_training_id, {
+        "source_training_id": training_id,
+        "source_title": source.title,
+    })
+    await db.commit()
+
+    # Re-fetch the new training with collaborators
+    new_stmt = select(Training).where(Training.id == new_training_id).options(selectinload(Training.collaborators))
+    new_result = await db.execute(new_stmt)
+    new_training_obj = new_result.scalar_one()
+    setattr(new_training_obj, "creator_name", current_user.full_name)
+    return new_training_obj
+
 
 @router.put("/{training_id}", response_model=TrainingSchema)
 async def update_training(
@@ -444,7 +563,7 @@ async def update_training(
     return training
 
 @router.get("/{training_id}", response_model=TrainingSchema)
-@cache_response("training_detail", expire=300, include_user_id=True)
+@cache_response("training_detail", expire=settings.CACHE_TTL_SHORT, include_user_id=True)
 async def read_training(
     training_id: str,
     db: AsyncSession = Depends(deps.get_db),
@@ -516,6 +635,7 @@ async def read_training(
     schema = TrainingSchema.model_validate(training)
     schema.total_chapters = total_count
     schema.completed_chapters = completed_count
+    schema.due_date = due_date
 
     if total_count > 0:
         schema.progress_percentage = round((completed_count / total_count) * 100, 2)
@@ -670,7 +790,8 @@ async def bulk_assign_training(
         raise HTTPException(status_code=400, detail="Training must be published or ready before assigning.")
 
     assignments_to_add = []
-    
+    enrollments_to_add = []
+
     # Process user assignments
     for user_id in bulk_data.user_ids:
         # Check if already assigned
@@ -691,7 +812,27 @@ async def bulk_assign_training(
                     due_date=bulk_data.due_date
                 )
             )
-            
+
+            # Create Enrollment so analytics, progress tracking, and
+            # completion checks can find this user without an auth-service call.
+            existing_enroll = await db.execute(
+                select(Enrollment).where(
+                    Enrollment.training_id == training_id,
+                    Enrollment.user_id == user_id,
+                    Enrollment.tenant_id == tenant_id,
+                )
+            )
+            if not existing_enroll.scalar_one_or_none():
+                enrollments_to_add.append(
+                    Enrollment(
+                        id=str(uuid.uuid4()),
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        training_id=training_id,
+                        training_version_id=training.version,
+                    )
+                )
+
             # Publish NEW_TRAINING_ASSIGNED event
             from app.core.events import publisher
             await publisher.publish_event(
@@ -727,6 +868,8 @@ async def bulk_assign_training(
 
     if assignments_to_add:
         db.add_all(assignments_to_add)
+        if enrollments_to_add:
+            db.add_all(enrollments_to_add)
         await db.commit()
         
         # Invalidate assigned trainings for affected users/groups
@@ -866,11 +1009,41 @@ async def delete_assignment(
         
     await db.delete(assignment)
     await db.commit()
-    
+
     # Invalidate assigned trainings
     await invalidate_cache("assigned_trainings", tenant_id)
-    
+
     return {"status": "success", "message": "Assignment removed"}
+
+
+@router.patch("/assignments/{assignment_id}", response_model=AssignmentSchema)
+async def update_assignment(
+    assignment_id: str,
+    body: TrainingAssignmentUpdate,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: deps.UserAuth = Depends(deps.get_current_tenant_user),
+    tenant_id: str = Depends(deps.get_current_tenant_id),
+):
+    """Update an assignment's due_date. Business Manager / Admin only."""
+    is_authorized = any(role in ["Business Manager", "Admin"] for role in current_user.roles)
+    if not is_authorized:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    result = await db.execute(
+        select(TrainingAssignment)
+        .where(TrainingAssignment.id == assignment_id, TrainingAssignment.tenant_id == tenant_id)
+    )
+    assignment = result.scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    assignment.due_date = body.due_date
+    await db.commit()
+    await db.refresh(assignment)
+    await invalidate_cache("assigned_trainings", tenant_id)
+
+    return AssignmentSchema.model_validate(assignment)
+
 
 @router.post("/{training_id}/archive", response_model=TrainingSchema)
 async def archive_training(
@@ -1157,6 +1330,87 @@ async def send_training_to_draft(
     return updated
 
 
+class ManagerRevertToDraftBody(BaseModel):
+    comment: str = ""
+
+
+@router.post("/{training_id}/manager-revert-to-draft", response_model=TrainingSchema)
+async def manager_revert_training_to_draft(
+    training_id: str,
+    body: ManagerRevertToDraftBody,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: deps.UserAuth = Depends(deps.get_business_manager),
+    tenant_id: str = Depends(deps.get_current_tenant_id),
+):
+    """
+    Manager sends a Ready training back to Draft.
+    Notifies the creator and all collaborators with an optional comment.
+    """
+    stmt = (
+        select(Training)
+        .where(Training.id == training_id, Training.tenant_id == tenant_id, Training.deleted_at == None)
+        .options(selectinload(Training.collaborators))
+    )
+    result = await db.execute(stmt)
+    training = result.scalar_one_or_none()
+
+    if not training:
+        raise HTTPException(status_code=404, detail="Training not found")
+    if training.is_archived:
+        raise HTTPException(status_code=400, detail="Cannot revert an archived training")
+    if training.is_published:
+        raise HTTPException(status_code=400, detail="Training is published — unpublish it first")
+    if not training.is_ready:
+        raise HTTPException(status_code=400, detail="Training is already in draft state")
+
+    training.is_ready = False
+
+    await log_audit(
+        db, tenant_id, current_user.id,
+        "MANAGER_SENT_TO_DRAFT", "training", training_id,
+        {"title": training.title, "comment": body.comment, "manager_user_id": current_user.id},
+    )
+
+    await db.commit()
+
+    # Notify creator + collaborators
+    from app.core.events import publisher
+    recipients = set()
+    if training.created_by_id:
+        recipients.add(training.created_by_id)
+    for collab in training.collaborators:
+        recipients.add(collab.user_id)
+
+    for uid in recipients:
+        try:
+            await publisher.publish_event(
+                "MANAGER_SENT_TO_DRAFT",
+                {
+                    "tenant_id": tenant_id,
+                    "recipient_user_id": uid,
+                    "training_id": training_id,
+                    "training_title": training.title,
+                    "manager_user_id": current_user.id,
+                    "comment": body.comment,
+                },
+            )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).error(
+                "Failed to publish MANAGER_SENT_TO_DRAFT event for user %s on training %s", uid, training_id
+            )
+
+    refreshed = await db.execute(
+        select(Training)
+        .where(Training.id == training_id, Training.tenant_id == tenant_id)
+        .options(selectinload(Training.collaborators))
+    )
+    updated = refreshed.scalar_one_or_none()
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to retrieve updated training")
+    return updated
+
+
 @router.post("/{training_id}/publish", response_model=TrainingSchema)
 async def publish_training(
     training_id: str,
@@ -1389,6 +1643,9 @@ async def get_training_audit(
     # State-transition actions visible to Business Managers
     STATE_TRANSITION_ACTIONS = {"MARK_READY", "SEND_TO_DRAFT", "PUBLISH", "UNPUBLISH", "ARCHIVE"}
 
+    # Progress-related actions hidden from non-managers (owners/collaborators)
+    PROGRESS_ACTIONS = {"progress_reset", "quiz_reset", "SUBMIT_QUIZ"}
+
     # 1. Load the training (tenant-scoped) — 404 if not found
     training_stmt = select(Training).where(
         Training.id == training_id,
@@ -1417,20 +1674,31 @@ async def get_training_audit(
     if not (is_manager or is_owner or is_collaborator):
         raise HTTPException(status_code=403, detail="Not enough permissions to view this training's audit log")
 
-    # 4. Query audit_logs for the training
+    # 4. Query audit_logs for the training — include direct events (entity_id == training_id)
+    #    and chapter/module events that store training_id in metadata_json
     audit_stmt = (
         select(AuditLog)
         .where(AuditLog.tenant_id == tenant_id)
-        .where(AuditLog.entity_id == training_id)
+        .where(
+            or_(
+                AuditLog.entity_id == training_id,
+                AuditLog.metadata_json["training_id"].as_string() == training_id,
+            )
+        )
         .order_by(AuditLog.created_at.desc())
         .limit(200)
     )
     result = await db.execute(audit_stmt)
     logs = result.scalars().all()
 
-    # 5. Role-based filtering: Managers (not owner, not collaborator) see only state transitions
-    if is_manager and not is_owner and not is_collaborator:
-        logs = [l for l in logs if l.action in STATE_TRANSITION_ACTIONS]
+    # 5. Role-based filtering:
+    #    - Managers (business_manager, admin, sysadmin): see ALL audit entries.
+    #    - Owner or collaborator (non-manager): exclude progress-related actions.
+    if is_manager:
+        pass  # Managers see all entries — no filter applied
+    else:
+        # Owner or collaborator: hide learner progress actions
+        logs = [l for l in logs if l.action not in PROGRESS_ACTIONS]
 
     # 6. Enrich with user names (best-effort)
     user_ids = list(set(l.user_id for l in logs))
@@ -1504,7 +1772,20 @@ async def reorder_chapters(
     if not await check_training_edit_permission(training, current_user, db):
         raise HTTPException(status_code=403, detail="Training must be in Draft state to edit content.")
 
-    # Bulk update sequence orders
+    # Two-phase update to avoid violating the partial unique index
+    # uq_chapters_training_seq_live on (training_id, sequence_order).
+    # A direct swap would create a transient duplicate within the same training,
+    # which Postgres rejects at statement-end. Phase 1 moves chapters to
+    # unreachable temporary values; phase 2 sets the final values.
+    TEMP_OFFSET = 1_000_000
+    for item in reorder_in.items:
+        await db.execute(
+            Chapter.__table__.update()
+            .where(Chapter.id == item.id)
+            .where(Chapter.module_id == module_id)
+            .where(Chapter.training_id == training_id)
+            .values(sequence_order=item.sequence_order + TEMP_OFFSET)
+        )
     for item in reorder_in.items:
         await db.execute(
             Chapter.__table__.update()
@@ -1620,14 +1901,18 @@ async def delete_module(
     if not db_item:
         raise HTTPException(status_code=404, detail="Module not found")
 
-    # Also delete associated chapters or let cascade handle it? 
-    # Usually we should delete chapters associated with this module in this training.
-    # The DB model might have cascade, but let's be explicit if needed or trust DB.
-    
+    # Fetch chapters before deletion so we can clean up their files after commit.
+    chap_result = await db.execute(
+        select(Chapter).where(Chapter.module_id == module_id, Chapter.training_id == training_id)
+    )
+    module_chapters = chap_result.scalars().all()
+
     await db.delete(db_item)
     await log_audit(db, tenant_id, current_user.id, "DELETE_MODULE", "module", module_id, {"training_id": training_id, "title": db_item.title})
     await db.commit()
-    
+
+    for ch in module_chapters:
+        storage.delete_chapter_files(str(ch.content_type or ""), tenant_id, training_id, ch.id)
     await invalidate_cache("training_structure", tenant_id)
     return None
 
@@ -1758,15 +2043,17 @@ async def delete_chapter(
     if not db_item:
         raise HTTPException(status_code=404, detail="Chapter not found")
 
+    content_type = str(db_item.content_type or "")
     await db.delete(db_item)
     await log_audit(db, tenant_id, current_user.id, "DELETE_CHAPTER", "chapter", chapter_id, {"training_id": training_id, "title": db_item.title})
     await db.commit()
-    
+
+    storage.delete_chapter_files(content_type, tenant_id, training_id, chapter_id)
     await invalidate_cache("training_structure", tenant_id)
     return None
 
 @router.get("/{training_id}/chapters/{chapter_id}", response_model=ChapterSchema)
-@cache_response("chapter_detail", expire=300)
+@cache_response("chapter_detail", expire=settings.CACHE_TTL_SHORT)
 async def get_chapter(
     training_id: str,
     chapter_id: str,
@@ -1939,7 +2226,8 @@ async def upload_chapter_content(
     if file.content_type not in ALLOWED_SCORM_MIME_TYPES:
         raise HTTPException(status_code=400, detail="Invalid file type. Only ZIP files are accepted for SCORM packages.")
 
-    # 2. Prepare storage path
+    # 2. Prepare storage path — clear existing content first so stale files don't accumulate
+    storage.delete_chapter_files("SCORM", tenant_id, training_id, chapter_id)
     storage_path = storage.prepare_storage_path(tenant_id, training_id, chapter_id)
     zip_path = storage_path / f"content_{uuid.uuid4()}.zip"
 
@@ -1979,7 +2267,7 @@ async def upload_chapter_content(
         raise HTTPException(status_code=500, detail="Failed to process SCORM package. Please try again.")
 
 @router.get("/{training_id}/structure", response_model=TrainingStructure)
-@cache_response("training_structure", expire=300, include_user_id=True)
+@cache_response("training_structure", expire=settings.CACHE_TTL_SHORT, include_user_id=True)
 async def get_training_structure(
     training_id: str,
     db: AsyncSession = Depends(deps.get_db),
@@ -2098,11 +2386,29 @@ async def get_training_structure(
     col_names = {col.key for col in mapper.column_attrs}
     training_dict = {k: getattr(training, k) for k in col_names}
 
-    enrollment_status = (
-        "completed" if (enroll and enroll.is_completed)
-        else "in_progress" if enroll
-        else "not_started"
+    # Per-user assignment due date (max across direct + group assignments)
+    assignment_due_date = await db.scalar(
+        select(func.max(TrainingAssignment.due_date))
+        .where(
+            TrainingAssignment.training_id == training_id,
+            TrainingAssignment.tenant_id == tenant_id,
+            or_(
+                TrainingAssignment.user_id == current_user.id,
+                TrainingAssignment.group_id.in_(current_user.groups) if current_user.groups else False,
+            ),
+        )
     )
+
+    now_utc = datetime.now(timezone.utc)
+    if enroll and enroll.is_completed:
+        enrollment_status = "completed"
+    elif assignment_due_date and assignment_due_date < now_utc:
+        enrollment_status = "expired"
+    elif enroll:
+        enrollment_status = "in_progress"
+    else:
+        enrollment_status = "not_started"
+
     training_dict.update({
         "modules": modules_out,
         "orphan_chapters": standalone_chaps,
@@ -2110,6 +2416,7 @@ async def get_training_structure(
         "status": enrollment_status,
         "certificate_id": enroll.certificate_id if enroll else None,
         "collaborators": [],
+        "due_date": assignment_due_date,
     })
     return TrainingStructure.model_validate(training_dict)
 
@@ -2162,8 +2469,19 @@ async def complete_chapter(
             detail="Training has expired and cannot be continued."
         )
 
-    # 1.6. Progress Locking: Removed to allow review of completed content
-    # (Individual chapter idempotency is handled below)
+    # 1.6. Idempotency: if already completed, return early — no gating needed.
+    # Quiz chapters are completed by submit_quiz; calling /complete again (e.g.
+    # via "Proceed to Next Lesson") must not re-run the gating check.
+    early_prog = await db.execute(
+        select(UserProgress).where(
+            UserProgress.user_id == current_user.id,
+            UserProgress.chapter_id == chapter_id,
+            UserProgress.deleted_at.is_(None),
+        )
+    )
+    early_prog = early_prog.scalar_one_or_none()
+    if early_prog and early_prog.status == ProgressStatus.COMPLETED:
+        return {"status": "already_completed"}
 
     # 2. Sequential Validation (Gating)
     if chapter.sequence_order > 1:
@@ -2209,8 +2527,6 @@ async def complete_chapter(
     prog = prog.scalar_one_or_none()
 
     if prog:
-        if prog.status == ProgressStatus.COMPLETED:
-            return {"status": "already_completed"}
         prog.status = ProgressStatus.COMPLETED
         prog.completed_at = datetime.now(timezone.utc)
     else:
@@ -2279,6 +2595,7 @@ async def _handle_pdf_upload(
     existing["url"] = url
     existing["original_filename"] = file.filename
     chapter.content_data = existing
+    logger.info(f"PDF upload chapter {chapter.id}: stored url={url}")
 
     await log_audit(
         db, tenant_id, current_user.id, "UPLOAD_PDF", "chapter", chapter.id,
@@ -2572,20 +2889,36 @@ async def submit_quiz(
         elif q_type in ("multiple_choice", "multiple_select", "true_false"):
             is_correct = sorted(user_answer.selected_option_ids) == sorted(correct_ids)
         elif q_type == "ordering":
-            is_correct = user_answer.ordered_ids == correct_ids
+            is_correct = (user_answer.ordered_ids or []) == correct_ids
         elif q_type == "matching":
-            correct_pairs = set(tuple(sorted(p.items())) for p in question.get("correct_pairs", []))
+            # correct_pairs may be stored as a list of dicts, or as correct_option_ids
+            # with "leftId::rightId" strings (the editor's storage format).
+            raw_correct = question.get("correct_pairs", [])
+            if not raw_correct:
+                raw_correct = [
+                    {parts[0]: parts[1]}
+                    for entry in question.get("correct_option_ids", [])
+                    if "::" in entry and len((parts := entry.split("::", 1))) == 2
+                ]
+            correct_pairs = set(tuple(sorted(p.items())) for p in raw_correct)
             user_pairs = set(tuple(sorted(p.items())) for p in (user_answer.pairs or []))
             is_correct = user_pairs == correct_pairs
         else:
             is_correct = False
+
+        if not is_correct:
+            logger.warning(
+                f"QUIZ_GRADE_MISMATCH q={question['id']} type={q_type} "
+                f"user_sent={user_answer.selected_option_ids if user_answer else None} "
+                f"expected={correct_ids}"
+            )
 
         if is_correct:
             correct_count += 1
 
         correct_answers_map[question["id"]] = correct_ids
 
-    score = (correct_count / total_questions * 100) if total_questions > 0 else 0
+    score = round(correct_count / total_questions * 100) if total_questions > 0 else 0
     passed = score >= passing_score
 
     new_attempt = QuizAttempt(
@@ -2659,6 +2992,91 @@ async def submit_quiz(
         is_locked=current_attempt_number >= max_attempts and not passed,
         correct_answers=correct_answers_map if (passed or current_attempt_number >= max_attempts) else None
     )
+
+
+@router.get("/{training_id}/quiz-attempts-summary")
+async def get_quiz_attempts_summary(
+    training_id: str,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: deps.UserAuth = Depends(deps.get_business_manager),
+    tenant_id: str = Depends(deps.get_current_tenant_id),
+):
+    """
+    List quiz chapters with users who have reached max attempts.
+    Returns chapters where at least one user's attempt_number >= max_attempts.
+    """
+    # Load all quiz chapters for this training
+    chapters_result = await db.execute(
+        select(Chapter).where(
+            Chapter.training_id == training_id,
+            Chapter.tenant_id == tenant_id,
+            Chapter.content_type == ContentType.QUIZ,
+            Chapter.deleted_at.is_(None),
+        )
+    )
+    chapters = chapters_result.scalars().all()
+    if not chapters:
+        return []
+
+    chapter_map = {c.id: c for c in chapters}
+    chapter_ids = list(chapter_map.keys())
+
+    # Load all non-deleted quiz attempts for these chapters
+    attempts_result = await db.execute(
+        select(QuizAttempt).where(
+            QuizAttempt.chapter_id.in_(chapter_ids),
+            QuizAttempt.tenant_id == tenant_id,
+            QuizAttempt.deleted_at.is_(None),
+        )
+    )
+    attempts = attempts_result.scalars().all()
+
+    # Group by (chapter_id, user_id) and find max attempt_number
+    from collections import defaultdict
+    grouped: dict = defaultdict(lambda: {"count": 0, "passed": False})
+    for a in attempts:
+        key = (a.chapter_id, a.user_id)
+        grouped[key]["count"] = max(grouped[key]["count"], a.attempt_number)
+        if a.passed:
+            grouped[key]["passed"] = True
+
+    # Collect users at limit per chapter
+    chapter_lockouts: dict = defaultdict(list)
+    affected_user_ids = set()
+    for (chapter_id, user_id), info in grouped.items():
+        chapter = chapter_map.get(chapter_id)
+        if not chapter:
+            continue
+        max_attempts = (chapter.content_data or {}).get("max_attempts", 0)
+        if max_attempts and info["count"] >= max_attempts and not info["passed"]:
+            chapter_lockouts[chapter_id].append({"user_id": user_id, "attempts": info["count"]})
+            affected_user_ids.add(user_id)
+
+    if not chapter_lockouts:
+        return []
+
+    # Enrich with user names
+    users_data = await deps.get_users_batch(list(affected_user_ids))
+
+    result = []
+    for chapter_id, locked_users in chapter_lockouts.items():
+        chapter = chapter_map[chapter_id]
+        max_attempts = (chapter.content_data or {}).get("max_attempts", 0)
+        result.append({
+            "chapter_id": chapter_id,
+            "chapter_title": chapter.title,
+            "max_attempts": max_attempts,
+            "users_at_limit": [
+                {
+                    "user_id": u["user_id"],
+                    "name": users_data.get(u["user_id"], {}).get("full_name", "Unknown"),
+                    "email": users_data.get(u["user_id"], {}).get("email", ""),
+                    "attempts": u["attempts"],
+                }
+                for u in locked_users
+            ],
+        })
+    return result
 
 
 @router.post("/{training_id}/chapters/{chapter_id}/quiz/reset/{user_id}")
@@ -2851,6 +3269,40 @@ async def export_training_scorm(
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
+@router.get("/{training_id}/completion-count")
+async def get_training_completion_count(
+    training_id: str,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: deps.UserAuth = Depends(deps.get_business_manager),
+    tenant_id: str = Depends(deps.get_current_tenant_id),
+):
+    training_result = await db.execute(
+        select(Training).where(Training.id == training_id, Training.tenant_id == tenant_id)
+    )
+    if not training_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Training not found")
+    count_result = await db.execute(
+        select(func.count(Enrollment.id)).where(
+            Enrollment.training_id == training_id,
+            Enrollment.tenant_id == tenant_id,
+            Enrollment.is_completed == True,
+        )
+    )
+    completed_count = count_result.scalar() or 0
+
+    # assigned_count: distinct users with active (not yet completed) assignments
+    assigned_result = await db.execute(
+        select(func.count(func.distinct(TrainingAssignment.user_id))).where(
+            TrainingAssignment.training_id == training_id,
+            TrainingAssignment.tenant_id == tenant_id,
+            TrainingAssignment.user_id.isnot(None),
+        )
+    )
+    assigned_count = assigned_result.scalar() or 0
+
+    return {"completed_count": completed_count, "assigned_count": assigned_count}
+
+
 @router.post("/{training_id}/unpublish", response_model=TrainingSchema)
 async def unpublish_training(
     training_id: str,
@@ -2965,3 +3417,53 @@ async def get_internal_metrics(
         total_certificates=total_certificates or 0,
         tenant_breakdown=breakdown
     )
+
+
+@router.post("/internal/auto-archive-expired")
+async def auto_archive_expired_trainings(
+    request: Request,
+    db: AsyncSession = Depends(deps.get_db),
+):
+    """
+    Internal endpoint: auto-archive all trainings whose content_expires_at has passed.
+    Protected by X-Internal-Api-Key header.
+    """
+    api_key = request.headers.get("X-Internal-Api-Key")
+    expected_key = getattr(settings, "INTERNAL_API_KEY", None) or os.environ.get("INTERNAL_API_KEY", "")
+    if api_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid internal API key")
+
+    now = datetime.now(timezone.utc)
+
+    expired_result = await db.execute(
+        select(Training).where(
+            Training.content_expires_at <= now,
+            Training.is_archived == False,
+            Training.is_published == True,
+        )
+    )
+    expired_trainings = expired_result.scalars().all()
+
+    archived = []
+    for training in expired_trainings:
+        training.is_archived = True
+        training.is_published = False
+        db.add(AuditLog(
+            tenant_id=training.tenant_id,
+            user_id="system",
+            action="AUTO_ARCHIVED",
+            entity_type="training",
+            entity_id=training.id,
+            metadata_json={"reason": "content_expired", "content_expires_at": str(training.content_expires_at)},
+        ))
+        archived.append({
+            "training_id": training.id,
+            "tenant_id": training.tenant_id,
+            "title": training.title,
+        })
+
+    if archived:
+        await db.commit()
+        logger.info(f"auto-archive-expired: archived {len(archived)} training(s)")
+
+    return archived

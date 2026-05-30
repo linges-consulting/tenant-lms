@@ -111,8 +111,13 @@ async def handle_event(db: AsyncSession, event: dict):
             subject="You're invited!",
             template_name="registration_invite.html",
             context={
-                "invite_url": payload.get("invite_url"),
+                "registration_url": payload.get("invite_url"),
+                "full_name": payload.get("full_name", payload.get("email", "")),
+                "token": payload.get("token", ""),
                 "tenant_name": payload.get("tenant_name"),
+                "primary_color": payload.get("primary_color", "#1e3a5f"),
+                "secondary_color": payload.get("secondary_color", "#2d6098"),
+                "logo_url": payload.get("logo_url"),
             },
         )
 
@@ -140,6 +145,25 @@ async def handle_event(db: AsyncSession, event: dict):
                 notification_type="info",
             ))
 
+    elif event_type == "MANAGER_SENT_TO_DRAFT":
+        recipient_id = payload.get("recipient_user_id")
+        if recipient_id:
+            notified_user_id = recipient_id
+            training_title = payload.get("training_title", "a training")
+            comment = payload.get("comment", "").strip()
+            message = f"The manager sent \"{training_title}\" back to draft."
+            if comment:
+                message += f" Reason: {comment}"
+            db.add(Notification(
+                id=str(uuid.uuid4()),
+                event_id=event_id,
+                user_id=recipient_id,
+                tenant_id=payload["tenant_id"],
+                title="Training Sent Back to Draft",
+                message=message,
+                notification_type="warning",
+            ))
+
     elif event_type == "COLLABORATOR_ADDED":
         # In-app to the newly added collaborator (BR-302a)
         collaborator_id = payload.get("collaborator_user_id")
@@ -155,6 +179,31 @@ async def handle_event(db: AsyncSession, event: dict):
                 message=f"You've been added as a collaborator on \"{training_title}\".",
                 notification_type="info",
             ))
+
+    elif event_type == "TRAINING_REMINDER":
+        # In-app + email to learner — manager-initiated manual reminder
+        notified_user_id = payload.get("user_id")
+        if notified_user_id:
+            db.add(Notification(
+                id=str(uuid.uuid4()),
+                event_id=event_id,
+                user_id=notified_user_id,
+                tenant_id=payload["tenant_id"],
+                title="Training Reminder",
+                message=f"Reminder: please complete '{payload.get('training_title', 'your training')}'.",
+                notification_type="info",
+            ))
+        await send_email(
+            to=payload.get("user_email", ""),
+            subject=f"Training Reminder: {payload.get('training_title', '')}",
+            template_name="training_reminder.html",
+            context={
+                "training_title": payload.get("training_title"),
+                "due_date": payload.get("due_date"),
+                "manager_name": payload.get("manager_name"),
+                "frontend_url": settings.FRONTEND_URL,
+            },
+        )
 
     else:
         logger.warning("Unhandled event type: %s", event_type)

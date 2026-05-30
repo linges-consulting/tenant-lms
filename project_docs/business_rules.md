@@ -188,3 +188,32 @@ Templates support dynamic placeholders resolved at PDF generation time:
 
 **BR-706 — Certificate Format**
 All certificates are generated as single-page, landscape-orientation PDFs. Templates are authored in HTML (with inline CSS). The system renders the HTML with resolved variables and converts to PDF.
+
+---
+
+## 8. Content Expiry & Completion Deadlines
+
+> The system separates two distinct concerns:
+> - **Content Expiry** (training-level, creator-set, `trainings.content_expires_at`) — when the training content becomes stale and is auto-archived. Affects all learners.
+> - **Completion Deadline** (assignment-level, manager-set, `training_assignments.due_date`) — by when a specific user/group must finish their assignment. Per-user.
+>
+> Updating one does not affect the other. A training can have content_expires_at in 2027 while individual assignments have due_dates in 2026.
+
+**BR-801 — Completion Deadline (Due Date)**
+When a Business Manager assigns a training to a user or group, they may set an optional **Due Date** (`training_assignments.due_date`). The learner sees this on their training cards as: "Past Due · {date}" (red) when past, "Due {date} · Nd left" (muted) otherwise. The label "Due Date" indicates the *completion deadline* — it does not imply access will be revoked when it passes (unless BR-603 Completion Lock is active for that assignment).
+
+**BR-802 — Auto-Archive on Content Expiry**
+The Training Creator may set a **Content Expiry Date** (`trainings.content_expires_at`) in the training editor. A daily background job (runs at midnight UTC) calls `POST /trainings/internal/auto-archive-expired`. Any published training whose `content_expires_at` is in the past is automatically set to `is_archived=True, is_published=False`. An `AUTO_ARCHIVED` audit entry is written with `{"reason": "content_expired", "content_expires_at": "..."}`. Business Managers in the affected tenant receive an in-app notification. When this fires, all learners lose access to that training regardless of their per-assignment due dates.
+
+**BR-803 — Manual Override**
+Managers may un-archive an auto-archived training and extend or clear its `content_expires_at` to re-publish it. They may also update per-assignment `due_date` values independently at any time. There is no automatic un-archive.
+
+---
+
+## 9. Audit Log Visibility
+
+**BR-901 — Manager View (All Events)**
+Business Managers, Admins, and SysAdmins viewing a training's audit log see all event types, including learner-progress events (`progress_reset`, `quiz_reset`, `SUBMIT_QUIZ`).
+
+**BR-902 — Creator View (Content + Collaborator + State Only)**
+Training Creators and Collaborators viewing the audit log see content-change events (training/module/chapter create/update/delete), collaborator add/remove, and lifecycle state events. They do NOT see learner-progress events.

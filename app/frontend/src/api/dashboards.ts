@@ -5,6 +5,7 @@ export interface ManagerDashboard {
   active_assignments: number;
   completion_rate: number;
   overdue_count: number;
+  quiz_lockouts: number;
 }
 
 export interface CreatorDashboard {

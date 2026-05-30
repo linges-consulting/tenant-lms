@@ -102,8 +102,8 @@ async def get_tenant_branding(tenant_id: str) -> dict:
 
 async def get_users_batch(user_ids: List[str]) -> dict:
     """
-    Calls Auth Service internal endpoint to get basic details (full_name, email)
-    for a list of user IDs. Returns a dict of {user_id: {"full_name": ..., "email": ...}}.
+    Calls Auth Service internal endpoint to get basic details (full_name, email, username)
+    for a list of user IDs. Returns a dict of {user_id: {"full_name": ..., "email": ..., "username": ...}}.
     """
     if not user_ids:
         return {}
@@ -147,6 +147,28 @@ async def get_groups_batch(group_ids: List[str]) -> dict:
         except Exception:
             # On failure, return empty dict or fallback gracefully
             return {}
+
+async def get_group_members_batch(group_ids: List[str]) -> dict[str, list[str]]:
+    """
+    Calls Auth Service internal endpoint to get member user_ids for a batch of
+    group IDs. Returns {group_id: [user_id, ...]}.
+    """
+    if not group_ids:
+        return {}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                f"{settings.AUTH_SERVICE_URL}/api/v1/groups/internal/members",
+                headers={"X-Internal-Api-Key": settings.INTERNAL_API_KEY},
+                json=group_ids,
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception:
+            return {}
+
 
 async def get_current_user(token: TokenDep) -> UserAuth:
     """
